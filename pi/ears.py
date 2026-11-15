@@ -69,6 +69,23 @@ def find_device() -> str:
     return "plughw:2,0"
 
 
+def known_word(model, model_dir: pathlib.Path, word: str) -> bool | None:
+    """Kelime ses modelinin sözlüğünde var mı? Bilinemiyorsa None."""
+    fn = getattr(model, "find_word", None)
+    if fn:
+        try:
+            return fn(word) >= 0
+        except Exception:  # noqa: BLE001
+            pass
+    for path in model_dir.rglob("words.txt"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return any(line.split(" ", 1)[0] == word for line in f)
+        except OSError:
+            pass
+    return None
+
+
 def strip_wake(text: str) -> str:
     """Yazıya çevrilmiş metnin başındaki uyandırma kelimesini atar: 'Robot, saat kaç?' -> 'saat kaç?'"""
     words = "|".join(re.escape(w) for w in WAKE_WORDS)
@@ -135,6 +152,14 @@ class Ears:
 
     def _run(self) -> None:
         try:
+            self._run_inner()
+        except Exception as e:  # noqa: BLE001
+            self.error = str(e)[:150]
+            self.running = False
+            log.exception("Kulaklar durdu: %s", e)
+
+    def _run_inner(self) -> None:
+        try:
             import numpy as np  # noqa: F401
             from vosk import KaldiRecognizer, Model, SetLogLevel
         except ImportError:
@@ -147,7 +172,7 @@ class Ears:
             return
         SetLogLevel(-1)
         model = Model(str(VOSK_MODEL))
-        self.missing_words = [w for w in WAKE_WORDS if model.find_word(w) < 0]
+        self.missing_words = [w for w in WAKE_WORDS if known_word(model, VOSK_MODEL, w) is False]
         known = [w for w in WAKE_WORDS if w not in self.missing_words]
         if self.missing_words:
             log.warning("Bu kelimeler ses modelinin sözlüğünde yok, algılanamaz: %s", self.missing_words)
