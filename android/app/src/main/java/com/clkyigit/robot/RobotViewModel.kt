@@ -41,6 +41,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var facts by mutableStateOf<List<String>>(emptyList())
         private set
+    var testResults by mutableStateOf<List<RobotApi.ModelHealth>>(emptyList())
+        private set
+    var testing by mutableStateOf(false)
+        private set
 
     private var streamJob: Job? = null
     private var cachedApi: RobotApi? = null
@@ -160,6 +164,21 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         streamJob?.cancel()
         streamJob = null
         streaming = false
+    }
+
+    fun runSelfTest() {
+        if (testing) return
+        testing = true
+        viewModelScope.launch {
+            try {
+                testResults = api().selfTest()
+                refreshStatus()
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                testing = false
+            }
+        }
     }
 
     fun loadFacts() {

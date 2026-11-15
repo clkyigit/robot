@@ -109,7 +109,7 @@ def build_telegram():
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             await update.message.reply_text("Buradayım. Bana yazabilir, fotoğraf gönderebilirsin. "
-                                            "Komutlar: /foto /hafiza /sifirla /durum")
+                                            "Komutlar: /foto /hafiza /sifirla /durum /test")
 
     async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
@@ -135,11 +135,26 @@ def build_telegram():
             brain.clear_history()
             await update.message.reply_text("Sohbet geçmişini temizledim. Kalıcı hatıralarım duruyor (/hafiza).")
 
+    def health_line(name: str, v: dict) -> str:
+        if v["ok"] is True:
+            icon, note = "✅", f"{v['ms']} ms" if v.get("ms") else "çalışıyor"
+        elif v["ok"] is False:
+            icon, note = "❌", v["error"]
+        else:
+            icon, note = "⚪", "henüz denenmedi (/test)"
+        return f"{icon} {name} ({v['model']}): {note}"
+
+    async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        await update.message.reply_text("Modelleri deniyorum...")
+        res = await brain.self_test()
+        await update.message.reply_text("\n".join(health_line(k, v) for k, v in res.items()))
+
     async def cmd_durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
-        st = brain.model_status()
-        lines = [f"{'✅' if v['active'] else '❌'} {k} ({v['model']})" for k, v in st.items()]
+        lines = [health_line(k, v) for k, v in brain.health().items()]
         t = cpu_temp()
         if t is not None:
             lines.append(f"🌡️ {t:.1f} °C")
@@ -153,6 +168,7 @@ def build_telegram():
     app.add_handler(CommandHandler("hafiza", cmd_hafiza))
     app.add_handler(CommandHandler("sifirla", cmd_sifirla))
     app.add_handler(CommandHandler("durum", cmd_durum))
+    app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
@@ -168,6 +184,7 @@ async def lifespan(_app: FastAPI):
         await tg.start()
         await tg.updater.start_polling()
     watcher = asyncio.create_task(camera.idle_watcher())
+    asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
     st = brain.model_status()
     log.info("Robot başladı. Claude=%s Gemini=%s OpenAI=%s Telegram=%s API=%s port=%d",
              st["claude"]["active"], st["gemini"]["active"], st["openai"]["active"],
@@ -219,11 +236,17 @@ async def index():
 @api.get("/api/status", dependencies=auth)
 async def status():
     return {
-        "models": brain.model_status(),
+        "models": brain.health(),
         "cpu_temp": cpu_temp(),
         "uptime_s": int(time.time() - STARTED),
         "camera": {"enabled": camera.enabled, "active": camera.active},
     }
+
+
+@api.post("/api/selftest", dependencies=auth)
+async def selftest():
+    """Her modele kısa bir istek gönderip gerçekten çalışıp çalışmadığını döner."""
+    return {"models": await brain.self_test()}
 
 
 @api.post("/api/chat", dependencies=auth)

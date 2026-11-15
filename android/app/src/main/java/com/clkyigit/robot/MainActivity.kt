@@ -103,7 +103,8 @@ fun RobotApp(vm: RobotViewModel = viewModel()) {
                             !vm.configured -> "ayar gerekli"
                             !vm.connected -> "bağlantı yok"
                             else -> buildString {
-                                append(s?.models?.joinToString(", ") ?: "")
+                                append(s?.models.orEmpty().filter { it.active }
+                                    .joinToString(" ") { (if (it.ok == false) "✗" else "") + it.name })
                                 s?.cpuTemp?.let { append(" · %.0f°C".format(it)) }
                             }
                         },
@@ -277,6 +278,24 @@ fun SettingsScreen(vm: RobotViewModel, onSaved: () -> Unit) {
             if (vm.connected) "✅ Bağlı" else if (vm.configured) "❌ Robota ulaşılamıyor" else "Adresi ve anahtarı gir",
             color = if (vm.connected) Accent else Color.Gray,
         )
+
+        Spacer(Modifier.height(8.dp))
+        Text("Modeller", style = MaterialTheme.typography.titleMedium)
+        OutlinedButton(onClick = { vm.runSelfTest() }, enabled = vm.connected && !vm.testing,
+            modifier = Modifier.fillMaxWidth()) {
+            Text(if (vm.testing) "Deneniyor…" else "Modelleri test et")
+        }
+        val shown = vm.testResults.ifEmpty { vm.status?.models.orEmpty() }
+        shown.forEach { m ->
+            val (icon, note) = when {
+                !m.active -> "⚪" to "anahtar yok"
+                m.ok == true -> "✅" to (m.ms?.let { "$it ms" } ?: "çalışıyor")
+                m.ok == false -> "❌" to m.error
+                else -> "⚪" to "henüz denenmedi"
+            }
+            Text("$icon ${m.name} · ${m.model}\n     $note", style = MaterialTheme.typography.bodyMedium,
+                color = if (m.ok == false) ErrorColor else Color(0xFFE8E8EA))
+        }
 
         Spacer(Modifier.height(8.dp))
         Text("Hafıza", style = MaterialTheme.typography.titleMedium)

@@ -63,7 +63,8 @@ Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gere
 
 | Yöntem | Yol | Ne yapar |
 |---|---|---|
-| GET | `/api/status` | Modeller, Pi sıcaklığı, kamera durumu |
+| GET | `/api/status` | Modellerin durumu, Pi sıcaklığı, kamera durumu |
+| POST | `/api/selftest` | Her modeli kısa bir istekle dener |
 | POST | `/api/chat` | `{"text": "..."}` → `{"reply", "photos"}` |
 | POST | `/api/look` | Fotoğraf çekip anlatır |
 | GET | `/api/photo` | Anlık fotoğraf (JPEG) |

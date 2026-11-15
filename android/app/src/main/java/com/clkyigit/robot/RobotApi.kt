@@ -71,17 +71,32 @@ class RobotApi(baseUrl: String, private val token: String) {
         }
     }
 
+    private fun parseModels(models: JSONObject): List<ModelHealth> =
+        models.keys().asSequence().map { name ->
+            val m = models.getJSONObject(name)
+            ModelHealth(
+                name = name,
+                model = m.optString("model"),
+                active = m.optBoolean("active"),
+                ok = if (m.isNull("ok")) null else m.optBoolean("ok"),
+                error = m.optString("error"),
+                ms = if (m.isNull("ms")) null else m.optInt("ms"),
+            )
+        }.toList()
+
     suspend fun status(): Status {
         val s = getJson("/api/status")
-        val models = s.getJSONObject("models")
-        val active = models.keys().asSequence().filter { models.getJSONObject(it).optBoolean("active") }.toList()
         val cam = s.getJSONObject("camera")
         return Status(
-            models = active,
+            models = parseModels(s.getJSONObject("models")),
             cpuTemp = if (s.isNull("cpu_temp")) null else s.getDouble("cpu_temp"),
             cameraEnabled = cam.optBoolean("enabled", true),
         )
     }
+
+    /** Her modele kısa bir istek gönderip gerçekten çalışıp çalışmadığını ölçer. */
+    suspend fun selfTest(): List<ModelHealth> =
+        parseModels(postJson("/api/selftest", JSONObject()).getJSONObject("models"))
 
     /** Robota mesaj gönderir. Robot araç olarak fotoğraf çektiyse onlar da gelir. */
     suspend fun chat(text: String): Reply {
@@ -140,6 +155,10 @@ class RobotApi(baseUrl: String, private val token: String) {
         }
     }.flowOn(Dispatchers.IO)
 
-    data class Status(val models: List<String>, val cpuTemp: Double?, val cameraEnabled: Boolean)
+    data class ModelHealth(
+        val name: String, val model: String, val active: Boolean,
+        val ok: Boolean?, val error: String, val ms: Int?,
+    )
+    data class Status(val models: List<ModelHealth>, val cpuTemp: Double?, val cameraEnabled: Boolean)
     data class Reply(val text: String, val photos: List<Bitmap>)
 }

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import pathlib
+import time
 from typing import Awaitable, Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -58,6 +59,77 @@ if OPENAI_KEY:
 
 # Telegram ve uygulama aynı anda yazarsa hafıza bozulmasın diye tek kilit
 _think_lock = asyncio.Lock()
+
+# Her modelin son durumu: uygulama ve /durum bunu gösterir
+HEALTH: dict = {name: {"ok": None, "error": "", "at": 0.0} for name in ("claude", "gemini", "openai")}
+
+
+def explain_error(e: Exception) -> str:
+    """API hatasını kısa, anlaşılır Türkçeye çevirir."""
+    text = str(e)
+    low = text.lower()
+    code = getattr(e, "status_code", None) or getattr(e, "code", None)
+    if code == 401 or "401" in low or "invalid x-api-key" in low or "api key not valid" in low \
+            or "invalid_api_key" in low or "incorrect api key" in low or "unauthenticated" in low:
+        return "API anahtarı geçersiz"
+    if code == 403 or "permission" in low or "403" in low:
+        return "Bu anahtarın yetkisi yok"
+    if code == 429 or "429" in low or "quota" in low or "rate limit" in low or "resource_exhausted" in low:
+        return "Kota ya da istek limiti doldu"
+    if "credit" in low or "billing" in low or "balance" in low or "insufficient" in low:
+        return "Bakiye yetersiz"
+    if code == 404 or "not_found" in low or "not found" in low or "does not exist" in low:
+        return "Model bulunamadı (model adını kontrol et)"
+    if isinstance(e, asyncio.TimeoutError) or "timeout" in low or "timed out" in low:
+        return "Zaman aşımı"
+    if "connect" in low or "network" in low or "dns" in low:
+        return "İnternet bağlantısı yok"
+    return text[:120] or e.__class__.__name__
+
+
+def _mark(name: str, ok: bool, err: Exception | None = None) -> None:
+    HEALTH[name] = {"ok": ok, "error": explain_error(err) if err else "", "at": time.time()}
+    if err:
+        log.warning("%s hatası: %s", name, err)
+
+
+def health() -> dict:
+    out = {}
+    for name, st in model_status().items():
+        h = HEALTH[name]
+        out[name] = {**st, "ok": h["ok"] if st["active"] else False,
+                     "error": h["error"] if st["active"] else "Anahtar yok", "ms": h.get("ms")}
+    return out
+
+
+async def self_test() -> dict:
+    """Her modele çok kısa bir istek gönderip gerçekten çalışıp çalışmadığını ölçer."""
+    async def t_claude():
+        await claude.messages.create(model=CLAUDE_FAST_MODEL, max_tokens=5,
+                                     messages=[{"role": "user", "content": "ping"}])
+
+    async def t_gemini():
+        await gemini.aio.models.generate_content(model=GEMINI_MODEL, contents="ping")
+
+    async def t_openai():
+        await openai_client.chat.completions.create(
+            model=OPENAI_MODEL, messages=[{"role": "user", "content": "ping"}])
+
+    tests = {"claude": (claude, t_claude), "gemini": (gemini, t_gemini), "openai": (openai_client, t_openai)}
+
+    async def run(name, client, fn):
+        if not client:
+            return
+        start = time.time()
+        try:
+            await asyncio.wait_for(fn(), timeout=30)
+            _mark(name, True)
+            HEALTH[name]["ms"] = int((time.time() - start) * 1000)
+        except Exception as e:  # noqa: BLE001
+            _mark(name, False, e)
+
+    await asyncio.gather(*(run(n, c, f) for n, (c, f) in tests.items()))
+    return health()
 
 
 def model_status() -> dict:
@@ -109,27 +181,48 @@ def system_prompt(mem: dict) -> str:
 
 
 async def describe_image(img: bytes, question: str) -> str:
-    """Gemini ile, yoksa Claude ile görüntüyü anlat."""
+    """Görüntüyü anlatır: önce Gemini, olmazsa Claude, o da olmazsa OpenAI. Hata fırlatmaz."""
     prompt = (f"Bu görüntü bir masa robotunun kamerasından ya da sahibinden geldi. Türkçe ve kısaca anlat. "
               f"Özellikle şu soruya odaklan: {question}")
-    if gemini:
-        try:
-            resp = await gemini.aio.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[gtypes.Part.from_bytes(data=img, mime_type="image/jpeg"), prompt])
-            if resp.text:
-                return resp.text.strip()
-        except Exception as e:  # noqa: BLE001
-            log.warning("Gemini görme hatası: %s", e)
-    if claude:
+    b64 = base64.b64encode(img).decode()
+
+    async def with_gemini():
+        resp = await gemini.aio.models.generate_content(
+            model=GEMINI_MODEL, contents=[gtypes.Part.from_bytes(data=img, mime_type="image/jpeg"), prompt])
+        return (resp.text or "").strip()
+
+    async def with_claude():
         resp = await claude.messages.create(
             model=CLAUDE_MODEL, max_tokens=600,
             messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                             "data": base64.b64encode(img).decode()}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
                 {"type": "text", "text": prompt}]}])
         return "".join(b.text for b in resp.content if b.type == "text").strip()
-    return "Görüntüyü anlayacak bir model bağlı değil."
+
+    async def with_openai():
+        resp = await openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}])
+        return (resp.choices[0].message.content or "").strip()
+
+    failures = []
+    for name, client, fn in (("gemini", gemini, with_gemini), ("claude", claude, with_claude),
+                             ("openai", openai_client, with_openai)):
+        if not client:
+            continue
+        try:
+            text = await asyncio.wait_for(fn(), timeout=60)
+            if text:
+                _mark(name, True)
+                return text
+        except Exception as e:  # noqa: BLE001
+            _mark(name, False, e)
+            failures.append(f"{name}: {HEALTH[name]['error']}")
+    if not failures:
+        return "Görüntüyü anlayacak bir model bağlı değil (.env dosyasına anahtar ekle)."
+    return "Fotoğrafı çektim ama anlatamadım. " + "; ".join(failures)
 
 
 # ---------------------------------------------------------------- araçlar
@@ -218,25 +311,29 @@ async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink) -> 
         history = list(mem["history"])
         attempts = []
         if claude:
-            attempts.append(("Claude", lambda: _think_claude(system, history, user_text, mem, take_photo, send_photo)))
+            attempts.append(("claude", lambda: _think_claude(system, history, user_text, mem, take_photo, send_photo)))
         if openai_client:
-            attempts.append(("OpenAI", lambda: _think_openai(system, history, user_text)))
+            attempts.append(("openai", lambda: _think_openai(system, history, user_text)))
         if gemini:
-            attempts.append(("Gemini", lambda: _think_gemini(system, history, user_text)))
+            attempts.append(("gemini", lambda: _think_gemini(system, history, user_text)))
         answer = ""
         if not attempts:
             answer = "Henüz bir beynim yok. .env dosyasına en az bir API anahtarı eklenmeli."
+        failures = []
         for name, fn in attempts:
             try:
                 answer = await asyncio.wait_for(fn(), timeout=90)
                 if answer:
-                    if name != "Claude":
+                    _mark(name, True)
+                    if name != "claude":
                         log.info("Cevap yedek modelden geldi: %s", name)
                     break
             except Exception as e:  # noqa: BLE001
-                log.warning("%s hatası: %s", name, e)
+                _mark(name, False, e)
+                failures.append(f"{name}: {HEALTH[name]['error']}")
         if not answer:
-            answer = "Şu an düşünemiyorum, bağlantımda bir sorun var. Birazdan tekrar dener misin?"
+            answer = ("Şu an düşünemiyorum. " + "; ".join(failures)) if failures else \
+                "Şu an düşünemiyorum, birazdan tekrar dener misin?"
         mem = load_memory()  # araçlar hafızaya yazmış olabilir
         mem["history"] += [{"role": "user", "content": user_text}, {"role": "assistant", "content": answer}]
         save_memory(mem)
