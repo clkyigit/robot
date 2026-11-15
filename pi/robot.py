@@ -38,7 +38,7 @@ PORT = int(os.environ.get("ROBOT_PORT", "8080"))
 STARTED = time.time()
 
 TG = None  # Telegram uygulaması (kulakların cevabı sahibine yazabilmesi için)
-EARS_NOTIFY_WAKE = os.environ.get("EARS_NOTIFY_WAKE", "1").strip() != "0"
+EARS_NOTIFY_WAKE = os.environ.get("EARS_NOTIFY_WAKE", "0").strip() == "1"
 EARS_VERIFY = os.environ.get("EARS_VERIFY", "1").strip() != "0"   # yazıda da kelime yoksa yanlış alarm say
 _wake_msg = None   # silinebilsin diye son "Dinliyorum" mesajı
 # Sesli konuşmaların son kayıtları (uygulama /api/ears ile görür)
