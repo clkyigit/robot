@@ -294,9 +294,8 @@ async def _drop_wake_msg() -> None:
 
 async def on_heard(wav: bytes) -> None:
     """Uyandırma kelimesinden sonra söylenen cümle: yazıya çevir, düşün, cevabı sahibine yaz."""
-    w = WAKE_WORDS[0].capitalize()
     try:
-        raw = await brain.transcribe(wav, hint=f"{w}, saat kaç? {w}, bugün hava nasıl?")
+        raw = await brain.transcribe(wav)
     except Exception as e:  # noqa: BLE001
         await tell_owner(f"🎤 Seni duydum ama sesi yazıya çeviremedim: {e}")
         return

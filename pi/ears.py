@@ -49,6 +49,9 @@ WAIT_FOR_SPEECH_S = 5.0    # kelimeden sonra bu kadar konuşmazsan vazgeçer
 END_SILENCE_S = 1.2        # konuşma bittikten sonra bu kadar sessizlik olunca kaydı bitirir
 MAX_RECORD_S = 20.0
 MIN_SPEECH_RMS = 400.0
+# Uyandırma kelimesi en az bu kadar yüksek (ortam gürültüsünün katı) söylenmeli; uzak konuşmayı eler.
+WAKE_LOUDNESS = float(os.environ.get("WAKE_LOUDNESS", "3"))
+WAKE_MIN_RMS = float(os.environ.get("WAKE_MIN_RMS", "600"))
 
 Utterance = Callable[[bytes], Awaitable[None]]
 Wake = Callable[[], Awaitable[None]]
@@ -212,9 +215,10 @@ class Ears:
         cmd = ["arecord", "-q", "-D", self.device, "-c", "2", "-r", str(RATE_IN), "-f", "S32_LE", "-t", "raw"]
         self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         nbytes = CHUNK_FRAMES * 2 * 4
-        dc = 0.0
+        dc: Optional[float] = None
         noise = 200.0
         preroll: collections.deque = collections.deque(maxlen=int(PREROLL_S / CHUNK_S))
+        loud: collections.deque = collections.deque(maxlen=int(1.0 / CHUNK_S))   # son 1 sn ses seviyeleri
         recording: Optional[list] = None
         rec_start = last_loud = 0.0
         spoke = False
@@ -232,7 +236,8 @@ class Ears:
                 continue
 
             x = np.frombuffer(buf, dtype="<i4").reshape(-1, 2)[:, MIC_CHANNEL].astype(np.float32) / 65536.0
-            dc = 0.9 * dc + 0.1 * float(x.mean())           # sabit kaymayı (DC) temizle
+            m = float(x.mean())
+            dc = m if dc is None else 0.9 * dc + 0.1 * m      # sabit kaymayı (DC) temizle
             x = (x - dc).reshape(-1, DECIM).mean(axis=1) * MIC_GAIN   # 48 kHz -> 16 kHz
             pcm = np.clip(x, -32767, 32767).astype("<i2").tobytes()
             rms = float(np.sqrt(np.mean(x * x)))
@@ -245,12 +250,20 @@ class Ears:
                 if rms < noise * 2:                       # ortam gürültüsünü öğren
                     noise = 0.97 * noise + 0.03 * rms
                 preroll.append(pcm)
+                loud.append(rms)
                 if rec.AcceptWaveform(pcm):
                     text = json.loads(rec.Result()).get("text", "")
                 else:
                     text = json.loads(rec.PartialResult()).get("partial", "")
-                if any(w in text.split() for w in known):
-                    log.info("Uyandırma kelimesi duyuldu (%s)", text)
+                words = text.split()
+                # Sadece cümlenin İLK kelimesi uyandırma kelimesiyse ve yakından, yüksek sesle söylendiyse
+                if words and words[0] in known:
+                    peak = max(loud) if loud else 0.0
+                    if peak < max(noise * WAKE_LOUDNESS, WAKE_MIN_RMS):
+                        log.debug("Kelime çok kısık, yok sayıldı (%.0f)", peak)
+                        rec.Reset()
+                        continue
+                    log.info("Uyandırma kelimesi duyuldu (%s, ses %.0f)", text, peak)
                     rec.Reset()
                     recording, rec_start, last_loud, spoke = list(preroll), now, now, False
                     if self._on_wake:

@@ -68,7 +68,7 @@ Robot uyandırma kelimesini (varsayılan **robot**) internetsiz algılar, sonrak
 yazıya çevirir (OpenAI, olmazsa Gemini), cevabı Telegram'a yazar. Telegram'da `/dinle` ve `/sus`.
 
 İsteğe bağlı ayarlar: `WAKE_WORDS`, `EARS=0`, `MIC_DEVICE`, `MIC_GAIN`, `EARS_NOTIFY_WAKE=0`,
-`OPENAI_STT_MODELS`. Not: robot dinlerken mikrofon meşguldür; `arecord` testi için önce `/sus`.
+`OPENAI_STT_MODELS`, `WAKE_LOUDNESS` (3), `WAKE_MIN_RMS` (600; robot uyanmıyorsa düşür), `EARS_VERIFY=0`. Not: robot dinlerken mikrofon meşguldür; `arecord` testi için önce `/sus`.
 
 ## Bilinç: kendini bilme ve günlük
 

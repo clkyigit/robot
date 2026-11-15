@@ -468,7 +468,8 @@ async def describe_image(img: bytes, question: str) -> str:
 STT_MODELS = [m.strip() for m in os.environ.get(
     "OPENAI_STT_MODELS", "gpt-4o-transcribe,gpt-4o-mini-transcribe,whisper-1").split(",") if m.strip()]
 # Sessiz kayıtta Whisper'ın uydurduğu bilinen cümleler
-_STT_JUNK = ("altyazı m.k", "abone olmayı unutmayın", "izlediğiniz için teşekkür", "altyazı:", "www.")
+_STT_JUNK = ("altyazı m.k", "abone olmayı unutmayın", "izlediğiniz için teşekkür", "altyazı:", "www.",
+             "bugün hava nasıl? robot", "robot, saat kaç? robot")
 
 
 async def transcribe(wav: bytes, hint: str = "") -> str:
