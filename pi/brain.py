@@ -50,7 +50,9 @@ gtypes = None
 if GEMINI_KEY:
     from google import genai
     from google.genai import types as gtypes
-    gemini = genai.Client(api_key=GEMINI_KEY)
+    # "-latest" takma adları sadece v1beta'da var; ListModels de v1beta listesini veriyor
+    gemini = genai.Client(api_key=GEMINI_KEY,
+                          http_options=gtypes.HttpOptions(api_version=os.environ.get("GEMINI_API_VERSION", "v1beta")))
 
 openai_client = None
 if OPENAI_KEY:
