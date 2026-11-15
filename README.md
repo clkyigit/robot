@@ -55,7 +55,7 @@ OPENAI_API_KEY=...
 API_TOKEN=...          # kurulum betiği üretir
 ```
 
-İsteğe bağlı: `CLAUDE_MODEL`, `CLAUDE_FAST_MODEL`, `GEMINI_MODEL`, `OPENAI_MODEL`, `ROBOT_PORT` (varsayılan 8080).
+İsteğe bağlı: `CLAUDE_MODEL`, `CLAUDE_FAST_MODEL`, `GEMINI_MODELS` (virgülle ayrılmış, sırayla denenir), `OPENAI_MODEL`, `ROBOT_PORT` (varsayılan 8080).
 
 ## Uygulama API'si
 

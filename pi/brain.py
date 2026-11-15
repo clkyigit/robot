@@ -32,7 +32,12 @@ OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 CLAUDE_FAST_MODEL = os.environ.get("CLAUDE_FAST_MODEL", "claude-haiku-5-5")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+# Gemini sırayla denenir: biri yoğunsa (503) ya da yoksa sıradakine geçilir
+GEMINI_MODELS = [m.strip() for m in os.environ.get(
+    "GEMINI_MODELS", os.environ.get("GEMINI_MODEL", "") + ",gemini-3.8-flash,gemini-3.5-flash,gemini-2.5-flash,gemini-flash-latest"
+).split(",") if m.strip()]
+GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))  # tekrarları at, sırayı koru
+GEMINI_MODEL = GEMINI_MODELS[0]
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 HISTORY_LIMIT = 30          # hafızada tutulan son mesaj sayısı
@@ -78,6 +83,8 @@ def explain_error(e: Exception) -> str:
         return "Bu anahtarın yetkisi yok"
     if code == 429 or "429" in low or "quota" in low or "rate limit" in low or "resource_exhausted" in low:
         return "Kota ya da istek limiti doldu"
+    if code == 503 or "503" in low or "unavailable" in low or "high demand" in low or "overloaded" in low:
+        return "Model şu an çok yoğun (geçici, sağlayıcı tarafı)"
     if "credit" in low or "billing" in low or "balance" in low or "insufficient" in low:
         return "Bakiye yetersiz"
     if code == 404 or "not_found" in low or "not found" in low or "does not exist" in low:
@@ -111,7 +118,7 @@ async def self_test() -> dict:
                                      messages=[{"role": "user", "content": "ping"}])
 
     async def t_gemini():
-        await gemini.aio.models.generate_content(model=GEMINI_MODEL, contents="ping")
+        await gemini_generate("ping")
 
     async def t_openai():
         await openai_client.chat.completions.create(
@@ -124,7 +131,7 @@ async def self_test() -> dict:
             return
         start = time.time()
         try:
-            await asyncio.wait_for(fn(), timeout=30)
+            await asyncio.wait_for(fn(), timeout=90)
             _mark(name, True)
             HEALTH[name]["ms"] = int((time.time() - start) * 1000)
         except Exception as e:  # noqa: BLE001
@@ -132,6 +139,28 @@ async def self_test() -> dict:
 
     await asyncio.gather(*(run(n, c, f) for n, (c, f) in tests.items()))
     return health()
+
+
+async def gemini_generate(contents, timeout: float = 25):
+    """GEMINI_MODELS listesini sırayla dener; ilk çalışan modelin cevabını döner."""
+    global GEMINI_MODEL
+    last = None
+    for m in [GEMINI_MODEL] + [x for x in GEMINI_MODELS if x != GEMINI_MODEL]:
+        try:
+            resp = await asyncio.wait_for(gemini.aio.models.generate_content(model=m, contents=contents), timeout)
+            if m != GEMINI_MODEL:
+                log.info("Gemini modeli değişti: %s -> %s", GEMINI_MODEL, m)
+                GEMINI_MODEL = m
+            return resp
+        except Exception as e:  # noqa: BLE001
+            low = str(e).lower()
+            retryable = isinstance(e, asyncio.TimeoutError) or any(
+                k in low for k in ("503", "unavailable", "high demand", "overloaded", "404", "not_found", "not found"))
+            log.warning("Gemini %s olmadı: %s", m, str(e)[:120])
+            last = e
+            if not retryable:
+                raise
+    raise last if last else RuntimeError("Gemini modeli yok")
 
 
 def model_status() -> dict:
@@ -189,8 +218,7 @@ async def describe_image(img: bytes, question: str) -> str:
     b64 = base64.b64encode(img).decode()
 
     async def with_gemini():
-        resp = await gemini.aio.models.generate_content(
-            model=GEMINI_MODEL, contents=[gtypes.Part.from_bytes(data=img, mime_type="image/jpeg"), prompt])
+        resp = await gemini_generate([gtypes.Part.from_bytes(data=img, mime_type="image/jpeg"), prompt])
         return (resp.text or "").strip()
 
     async def with_claude():
@@ -215,7 +243,7 @@ async def describe_image(img: bytes, question: str) -> str:
         if not client:
             continue
         try:
-            text = await asyncio.wait_for(fn(), timeout=60)
+            text = await asyncio.wait_for(fn(), timeout=100)
             if text:
                 _mark(name, True)
                 return text
@@ -301,7 +329,7 @@ async def _think_openai(system, history, user_text) -> str:
 async def _think_gemini(system, history, user_text) -> str:
     convo = "\n".join(f"{'Sahibim' if m['role'] == 'user' else 'Ben'}: {m['content']}" for m in history)
     prompt = f"{system}\n\nSohbet:\n{convo}\nSahibim: {user_text}\nBen:"
-    resp = await gemini.aio.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+    resp = await gemini_generate(prompt)
     return (resp.text or "").strip()
 
 
