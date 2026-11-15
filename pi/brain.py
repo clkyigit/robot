@@ -234,7 +234,12 @@ def system_prompt(mem: dict, channel: str = "") -> str:
     gun = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")[n.weekday()]
     now = n.strftime("%d.%m.%Y %H:%M, ") + gun
     facts = "\n".join(f"- {f}" for f in mem["facts"]) or "(henüz yok)"
-    parts = [persona, f"Şu an: {now}"]
+    parts = [persona,
+             f"Şu anki tarih ve saat: {now}. Bu bilgi her mesajda sistem saatinden yeniden okunur, kesin doğrudur; "
+             "saat ya da tarih sorulursa çekinmeden bunu söyle.",
+             "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
+             "fotograf_cek aracını gerçekten kullandıysan söyle; kullanmadıysan asla görmüş gibi anlatma, gerekiyorsa "
+             "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle."]
 
     last = last_talk_time()
     if last:
