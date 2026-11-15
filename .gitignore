@@ -25,3 +25,5 @@ android/local.properties
 # Ses modelleri ve kayıtlar
 pi/models/
 *.wav
+pi/gunluk/
+pi/kimlik.md

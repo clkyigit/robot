@@ -70,6 +70,17 @@ yazıya çevirir (OpenAI, olmazsa Gemini), cevabı Telegram'a yazar. Telegram'da
 İsteğe bağlı ayarlar: `WAKE_WORDS`, `EARS=0`, `MIC_DEVICE`, `MIC_GAIN`, `EARS_NOTIFY_WAKE=0`,
 `OPENAI_STT_MODELS`. Not: robot dinlerken mikrofon meşguldür; `arecord` testi için önce `/sus`.
 
+## Bilinç: kendini bilme ve günlük
+
+- Robot her mesajda kendi durumunu bilir: sıcaklık, fan, bellek, Wi-Fi, açık kalma süresi, kamera/kulak durumu,
+  çalışmayan modeller ve `pi/govde.md` dosyasındaki parça listesi (parça gelince bu dosyayı güncelle).
+- Mesajın nereden geldiğini (Telegram, uygulama, ses) ve en son ne zaman konuştuğunuzu bilir.
+- Her konuşma `pi/gunluk/` içine kaydedilir. Her gece `DIARY_TIME` (23:30) saatinde kendi günlüğünü yazar,
+  ardından kendisi hakkındaki notlarını (`pi/kimlik.md`) günceller. Eski günler için `gecmise_bak` aracını kullanır.
+- `TEMP_ALERT` (75 °C) aşılırsa Telegram'dan uyarır.
+- Telegram: `/gunluk`, `/gunluk yaz`, `/gunluk 2026-11-15`, `/kimlik`. Uygulama: `GET /api/self`.
+- `gunluk/` ve `kimlik.md` kişiseldir, repoya girmez.
+
 ## Uygulama API'si
 
 Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.

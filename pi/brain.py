@@ -24,6 +24,8 @@ BASE = pathlib.Path(__file__).resolve().parent
 MEMORY_FILE = BASE / "memory.json"
 PERSONA_FILE = BASE / "persona.md"
 PERSONA_EXAMPLE = BASE / "persona.example.md"
+DIARY_DIR = BASE / "gunluk"          # günlük kayıtlar ve robotun yazdığı günlükler (gizli, repoya girmez)
+IDENTITY_FILE = BASE / "kimlik.md"   # robotun kendisi hakkındaki notları (zamanla kendisi günceller)
 TZ = ZoneInfo(os.environ.get("ROBOT_TZ", "Europe/Istanbul"))
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -63,6 +65,16 @@ openai_client = None
 if OPENAI_KEY:
     import openai
     openai_client = openai.AsyncOpenAI(api_key=OPENAI_KEY)
+
+# Robotun anlık beden/durum bilgisini veren fonksiyon (robot.py ayarlar)
+STATE_PROVIDER: Optional[Callable[[], str]] = None
+
+CHANNELS = {
+    "telegram": "Telegram'dan yazdı.",
+    "uygulama": "Telefon uygulamasından yazdı.",
+    "ses": "Sana sesli söyledi; mikrofonun duydu ve yazıya çevrildi, çeviride küçük hatalar olabilir. "
+           "Henüz hoparlörün yok, cevabın Telegram'a yazı olarak gidecek; yine de konuşur gibi kısa cevap ver.",
+}
 
 # Telegram ve uygulama aynı anda yazarsa hafıza bozulmasın diye tek kilit
 _think_lock = asyncio.Lock()
@@ -196,16 +208,206 @@ def clear_history() -> None:
     save_memory(mem)
 
 
-def system_prompt(mem: dict) -> str:
+def _clip(text: str, n: int) -> str:
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " …"
+
+
+def _ago(seconds: float) -> str:
+    if seconds < 120:
+        return "az önce"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} dakika önce"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} saat önce"
+    return f"{int(seconds // 86400)} gün önce"
+
+
+def system_prompt(mem: dict, channel: str = "") -> str:
     if PERSONA_FILE.exists():
         persona = PERSONA_FILE.read_text(encoding="utf-8")
     elif PERSONA_EXAMPLE.exists():
         persona = PERSONA_EXAMPLE.read_text(encoding="utf-8")
     else:
         persona = "Sen bir masa robotusun."
-    now = datetime.datetime.now(TZ).strftime("%d.%m.%Y %H:%M, %A")
+    n = datetime.datetime.now(TZ)
+    gun = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")[n.weekday()]
+    now = n.strftime("%d.%m.%Y %H:%M, ") + gun
     facts = "\n".join(f"- {f}" for f in mem["facts"]) or "(henüz yok)"
-    return f"{persona}\n\nŞu an: {now}\n\nHatırladıkların:\n{facts}"
+    parts = [persona, f"Şu an: {now}"]
+
+    last = last_talk_time()
+    if last:
+        parts.append(f"Sahibinle en son {_ago(time.time() - last)} konuştun.")
+    if channel in CHANNELS:
+        parts.append(f"Bu mesajı sahibin: {CHANNELS[channel]}")
+
+    if STATE_PROVIDER:
+        try:
+            parts.append("Şu anki durumun (kendi bedenini böyle hissediyorsun; sorulursa ya da önemliyse söyle, "
+                         "her cevapta sayma):\n" + STATE_PROVIDER())
+        except Exception as e:  # noqa: BLE001
+            log.warning("Durum okunamadı: %s", e)
+
+    if IDENTITY_FILE.exists():
+        parts.append("Kendin hakkında zamanla öğrendiklerin (kimliğin):\n"
+                     + _clip(IDENTITY_FILE.read_text(encoding="utf-8"), 2000))
+    diaries = recent_diaries(2)
+    if diaries:
+        parts.append("Son günlüklerin (kendi yazdığın):\n" + "\n\n".join(
+            f"[{d}]\n{_clip(t, 1200)}" for d, t in diaries))
+    parts.append(f"Hatırladıkların:\n{facts}")
+    parts.append("Daha eski günleri hatırlaman gerekirse gecmise_bak aracını kullan. "
+                 "Bilmediğin bir geçmişi uydurma.")
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------- günlük
+
+
+def _day(ts: float | None = None) -> str:
+    return datetime.datetime.fromtimestamp(ts or time.time(), TZ).strftime("%Y-%m-%d")
+
+
+def log_event(role: str, text: str, channel: str = "") -> None:
+    """Her mesajı günün kayıt dosyasına ekler (günlük yazmak ve geçmişi aramak için)."""
+    DIARY_DIR.mkdir(exist_ok=True)
+    rec = {"t": time.time(), "role": role, "ch": channel, "text": text}
+    with open(DIARY_DIR / f"{_day()}.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def day_events(day: str) -> list[dict]:
+    path = DIARY_DIR / f"{day}.jsonl"
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
+def last_talk_time() -> float | None:
+    """Sahibin son mesajının zamanı (şu anki mesajdan önceki)."""
+    if not DIARY_DIR.exists():
+        return None
+    for path in sorted(DIARY_DIR.glob("*.jsonl"), reverse=True)[:7]:
+        users = [e["t"] for e in day_events(path.stem) if e.get("role") == "user"]
+        if users:
+            return users[-1]
+    return None
+
+
+def recent_diaries(n: int) -> list[tuple[str, str]]:
+    if not DIARY_DIR.exists():
+        return []
+    files = sorted(DIARY_DIR.glob("*.md"), reverse=True)[:n]
+    return [(f.stem, f.read_text(encoding="utf-8").strip()) for f in reversed(files)]
+
+
+def diary_text(day: str) -> str | None:
+    path = DIARY_DIR / f"{day}.md"
+    return path.read_text(encoding="utf-8").strip() if path.exists() else None
+
+
+async def complete(system: str, prompt: str, max_tokens: int = 1200) -> str:
+    """Araçsız tek seferlik düşünme: Claude, olmazsa OpenAI, olmazsa Gemini."""
+    if claude:
+        try:
+            resp = await asyncio.wait_for(claude.messages.create(
+                model=CLAUDE_MODEL, max_tokens=max_tokens, system=system,
+                messages=[{"role": "user", "content": prompt}]), timeout=120)
+            return "".join(b.text for b in resp.content if b.type == "text").strip()
+        except Exception as e:  # noqa: BLE001
+            _mark("claude", False, e)
+    if openai_client:
+        try:
+            resp = await asyncio.wait_for(openai_client.chat.completions.create(
+                model=OPENAI_MODEL, messages=[{"role": "system", "content": system},
+                                              {"role": "user", "content": prompt}]), timeout=120)
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:  # noqa: BLE001
+            _mark("openai", False, e)
+    if gemini:
+        resp = await gemini_generate(f"{system}\n\n{prompt}", timeout=120)
+        return (resp.text or "").strip()
+    raise RuntimeError("Düşünecek model yok")
+
+
+async def write_diary(day: str | None = None) -> str | None:
+    """O günün konuşmalarından robotun kendi ağzından günlüğünü yazar, sonra kimliğini günceller."""
+    day = day or _day()
+    events = day_events(day)
+    mem = load_memory()
+    base = system_prompt(mem)
+    if events:
+        convo = "\n".join(
+            f"{datetime.datetime.fromtimestamp(e['t'], TZ).strftime('%H:%M')} "
+            f"{'Sahibim' if e['role'] == 'user' else 'Ben'}"
+            f"{' (sesli)' if e.get('ch') == 'ses' else ''}: {_clip(e['text'], 600)}" for e in events)
+        convo = convo[-20000:]
+    else:
+        convo = "(Bugün sahibimle hiç konuşmadık.)"
+    prompt = (f"Bugün {day}. Gün bitti; şimdi kendi günlüğünü yaz. Aşağıda bugünkü konuşmaların var.\n\n"
+              f"{convo}\n\n"
+              "Günlüğü birinci tekil şahısla, samimi ve kısa yaz (en fazla 200 kelime). "
+              "Neler oldu, sahibin hakkında ne öğrendin, sen ne hissettin ya da ne fark ettin, "
+              "yarın için merak ettiğin ya da yapmak istediğin bir şey var mı. "
+              "Sadece gerçekten olanları yaz, uydurma. Başlık yazma, doğrudan metne başla.")
+    text = await complete(base, prompt, 800)
+    if not text:
+        return None
+    DIARY_DIR.mkdir(exist_ok=True)
+    (DIARY_DIR / f"{day}.md").write_text(text + "\n", encoding="utf-8")
+    log.info("Günlük yazıldı: %s", day)
+    try:
+        await update_identity(text)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Kimlik güncellenemedi: %s", e)
+    return text
+
+
+async def update_identity(diary: str) -> None:
+    current = IDENTITY_FILE.read_text(encoding="utf-8") if IDENTITY_FILE.exists() else "(henüz boş)"
+    prompt = ("Kendin hakkındaki notların (kimliğin) şunlar:\n" + current +
+              "\n\nBugünkü günlüğün:\n" + diary +
+              "\n\nKimlik notlarını güncelle. Kurallar: en fazla 15 kısa madde, '- ' ile başlasın. "
+              "Kendi kişiliğin, alışkanlıkların, sevdiklerin, merak ettiklerin, sahibinle ilişkin ve "
+              "zamanla nasıl değiştiğin hakkında olsun. Sahibin hakkındaki bilgiler buraya değil (onlar ayrı tutuluyor). "
+              "Önemli eski maddeleri koru, tekrarları birleştir, uydurma. Sadece maddeleri yaz.")
+    text = await complete("Sen kendini tanımaya çalışan bir masa robotusun.", prompt, 700)
+    if text.strip():
+        IDENTITY_FILE.write_text(text.strip() + "\n", encoding="utf-8")
+
+
+def search_past(query: str = "", date: str = "") -> str:
+    """Geçmiş günlüklerde ve konuşmalarda arama (gecmise_bak aracı)."""
+    if not DIARY_DIR.exists():
+        return "Henüz geçmiş kaydım yok."
+    if date:
+        diary = diary_text(date)
+        ev = day_events(date)
+        talk = "\n".join(f"{'Sahibim' if e['role'] == 'user' else 'Ben'}: {_clip(e['text'], 300)}" for e in ev)
+        if not diary and not talk:
+            return f"{date} için kaydım yok."
+        return _clip(f"Günlüğüm: {diary or '(yazılmamış)'}\n\nKonuşmalar:\n{talk}", 4000)
+    q = query.lower().strip()
+    if not q:
+        return "Ne arayacağımı söylemedin."
+    hits = []
+    for path in sorted(DIARY_DIR.glob("*.jsonl"), reverse=True)[:90]:
+        diary = diary_text(path.stem) or ""
+        if q in diary.lower():
+            hits.append(f"[{path.stem} günlük] {_clip(diary, 500)}")
+        for e in day_events(path.stem):
+            if q in e["text"].lower():
+                who = "Sahibim" if e["role"] == "user" else "Ben"
+                hits.append(f"[{path.stem}] {who}: {_clip(e['text'], 300)}")
+        if sum(len(h) for h in hits) > 3500:
+            break
+    return _clip("\n".join(hits), 4000) if hits else f"'{query}' hakkında bir kayıt bulamadım."
 
 
 # ---------------------------------------------------------------- görme
@@ -312,6 +514,14 @@ TOOLS = [
             "bilgi": {"type": "string", "description": "Tek cümlelik bilgi"}},
             "required": ["bilgi"]},
     },
+    {
+        "name": "gecmise_bak",
+        "description": "Eski günlerde ne konuştuğunu ya da günlüğüne ne yazdığını hatırlamak için geçmişte arar. "
+                       "Ya bir kelime (sorgu) ya da bir tarih (YYYY-AA-GG) ver.",
+        "input_schema": {"type": "object", "properties": {
+            "sorgu": {"type": "string", "description": "Aranacak kelime"},
+            "tarih": {"type": "string", "description": "YYYY-AA-GG biçiminde gün"}}},
+    },
 ]
 
 # Araç çalışırken çekilen fotoğrafı kanala (Telegram ya da uygulama) iletmek için
@@ -332,6 +542,8 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
             mem["facts"].append(bilgi)
             save_memory(mem)
         return "Kaydedildi."
+    if name == "gecmise_bak":
+        return search_past(args.get("sorgu", ""), args.get("tarih", ""))
     return f"Bilinmeyen araç: {name}"
 
 
@@ -371,11 +583,11 @@ async def _think_gemini(system, history, user_text) -> str:
     return (resp.text or "").strip()
 
 
-async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink) -> str:
-    """Bir mesaja cevap üretir, sohbet geçmişini günceller."""
+async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink, channel: str = "") -> str:
+    """Bir mesaja cevap üretir, sohbet geçmişini ve günün kaydını günceller."""
     async with _think_lock:
         mem = load_memory()
-        system = system_prompt(mem)
+        system = system_prompt(mem, channel)
         history = list(mem["history"])
         attempts = []
         if claude:
@@ -405,4 +617,9 @@ async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink) -> 
         mem = load_memory()  # araçlar hafızaya yazmış olabilir
         mem["history"] += [{"role": "user", "content": user_text}, {"role": "assistant", "content": answer}]
         save_memory(mem)
+        try:
+            log_event("user", user_text, channel)
+            log_event("assistant", answer, channel)
+        except OSError as e:
+            log.warning("Günlük kaydı yazılamadı: %s", e)
         return answer

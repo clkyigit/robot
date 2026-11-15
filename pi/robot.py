@@ -27,6 +27,7 @@ log = logging.getLogger("robot")
 import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
 from ears import ears, strip_wake  # noqa: E402
+import body  # noqa: E402
 
 BASE = pathlib.Path(__file__).resolve().parent
 WEB_DIR = BASE / "web"
@@ -54,10 +55,31 @@ def store_photo(img: bytes) -> str:
 
 
 def cpu_temp() -> float | None:
-    try:
-        return int(pathlib.Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000
-    except (OSError, ValueError):
-        return None
+    return body.cpu_temp()
+
+
+DIARY_TIME = os.environ.get("DIARY_TIME", "23:30")          # robot her gece bu saatte günlüğünü yazar
+DIARY_SHARE = os.environ.get("DIARY_SHARE", "1").strip() != "0"   # günlüğü Telegram'dan paylaşsın mı
+TEMP_ALERT = float(os.environ.get("TEMP_ALERT", "75"))      # bu sıcaklığı geçince sahibini uyarır
+
+
+def self_state() -> str:
+    """Beyne verilen anlık durum: beden + duyular."""
+    extra = [f"Kameram (gözüm) {'açık' if camera.enabled else 'gizlilik için kapalı'}."]
+    st = ears.status()
+    if not st["enabled"]:
+        extra.append("Kulaklarım (mikrofon) sahibim tarafından kapatıldı.")
+    elif st["running"]:
+        extra.append(f"Kulaklarım açık; biri \"{st['wake_words'][0]}\" deyince dinliyorum.")
+    else:
+        extra.append(f"Kulaklarım çalışmıyor ({st['error'] or 'başlıyor'}).")
+    bad = [f"{k} ({v['error']})" for k, v in brain.health().items() if v["ok"] is False]
+    if bad:
+        extra.append("Düşünme modellerimden çalışmayanlar: " + ", ".join(bad) + ".")
+    return body.describe(extra)
+
+
+brain.STATE_PROVIDER = self_state
 
 
 def owner_id():
@@ -96,7 +118,7 @@ def build_telegram():
         async def send_photo(img: bytes) -> None:
             await update.message.reply_photo(img)
 
-        reply = await brain.chat(text, camera.photo, send_photo)
+        reply = await brain.chat(text, camera.photo, send_photo, "telegram")
         await reply_long(update, reply)
 
     async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,7 +138,7 @@ def build_telegram():
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             await update.message.reply_text("Buradayım. Bana yazabilir, fotoğraf gönderebilirsin. "
-                                            "Komutlar: /foto /hafiza /sifirla /durum /test /dinle /sus")
+                                            "Komutlar: /foto /hafiza /gunluk /kimlik /sifirla /durum /test /dinle /sus")
 
     async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
@@ -168,6 +190,31 @@ def build_telegram():
         else:
             await update.message.reply_text(f"👂 Dinliyorum. Bana seslenmek için \"{st['wake_words'][0]}\" de.")
 
+    async def cmd_gunluk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        arg = (context.args[0] if context.args else "").strip()
+        if arg == "yaz":
+            await update.message.reply_text("Bugünkü günlüğümü yazıyorum...")
+            text = await brain.write_diary()
+            await reply_long(update, f"📔 {text}" if text else "Yazamadım, birazdan tekrar dener misin?")
+            return
+        days = brain.recent_diaries(1) if not arg else [(arg, brain.diary_text(arg) or "")]
+        if not days or not days[0][1]:
+            await update.message.reply_text("Henüz günlük yazmadım. Her gece " + DIARY_TIME +
+                                            "'da yazıyorum; şimdi yazmamı istersen: /gunluk yaz")
+            return
+        d, t = days[-1]
+        await reply_long(update, f"📔 {d}\n\n{t}")
+
+    async def cmd_kimlik(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        f = brain.IDENTITY_FILE
+        text = f.read_text(encoding="utf-8").strip() if f.exists() else ""
+        await reply_long(update, f"🪞 Kendimi şöyle tanıyorum:\n\n{text}" if text else
+                         "Kendimi henüz tanımıyorum. İlk günlüğümü yazınca burası dolmaya başlayacak.")
+
     async def cmd_sus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             ears.set_enabled(False)
@@ -193,6 +240,8 @@ def build_telegram():
     app.add_handler(CommandHandler("durum", cmd_durum))
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("dinle", cmd_dinle))
+    app.add_handler(CommandHandler("gunluk", cmd_gunluk))
+    app.add_handler(CommandHandler("kimlik", cmd_kimlik))
     app.add_handler(CommandHandler("sus", cmd_sus))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -247,11 +296,48 @@ async def on_heard(wav: bytes) -> None:
         photo_ids.append(store_photo(img))
         await tell_owner(photo=img)
 
-    reply = await brain.chat(text, camera.photo, send_photo)
+    reply = await brain.chat(text, camera.photo, send_photo, "ses")
     VOICE_LOG.append({"at": time.time(), "heard": text, "reply": reply,
                       "photos": [f"/api/photos/{p}" for p in photo_ids]})
     del VOICE_LOG[:-20]
     await tell_owner(f"🎤 {text}\n\n🤖 {reply}")
+
+
+# ================================================================ arka plan: günlük ve beden takibi
+
+
+async def diary_loop() -> None:
+    """Her gece DIARY_TIME'da günlük yazar; kaçırılan dünkü günlüğü de açılışta tamamlar."""
+    import datetime
+    await asyncio.sleep(60)
+    yesterday = (datetime.datetime.now(brain.TZ) - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    if brain.day_events(yesterday) and not brain.diary_text(yesterday):
+        with contextlib.suppress(Exception):
+            await brain.write_diary(yesterday)
+    hh, mm = (int(x) for x in DIARY_TIME.split(":"))
+    while True:
+        now = datetime.datetime.now(brain.TZ)
+        today = now.strftime("%Y-%m-%d")
+        if (now.hour, now.minute) >= (hh, mm) and not brain.diary_text(today):
+            try:
+                text = await brain.write_diary(today)
+                if text and DIARY_SHARE:
+                    await tell_owner(f"📔 Bugünkü günlüğüm:\n\n{text}")
+            except Exception as e:  # noqa: BLE001
+                log.warning("Günlük yazılamadı: %s", e)
+        await asyncio.sleep(300)
+
+
+async def body_watch() -> None:
+    """Bedenini izler: aşırı ısınırsa sahibini uyarır (saatte en fazla bir kez)."""
+    last_alert = 0.0
+    while True:
+        t = body.cpu_temp()
+        if t is not None and t >= TEMP_ALERT and time.time() - last_alert > 3600:
+            last_alert = time.time()
+            await tell_owner(f"🥵 Çok ısındım: {t:.0f} °C. Fanım çalışmıyor; beni serin bir yere koyabilir "
+                             "ya da biraz dinlendirebilir misin?")
+        await asyncio.sleep(60)
 
 
 # ================================================================ uygulama sunucusu
@@ -267,6 +353,7 @@ async def lifespan(_app: FastAPI):
     watcher = asyncio.create_task(camera.idle_watcher())
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
     ears.start(asyncio.get_running_loop(), on_heard, on_wake)
+    bg = [asyncio.create_task(diary_loop()), asyncio.create_task(body_watch())]
     st = brain.model_status()
     log.info("Robot başladı. Claude=%s Gemini=%s OpenAI=%s Telegram=%s API=%s port=%d",
              st["claude"]["active"], st["gemini"]["active"], st["openai"]["active"],
@@ -275,6 +362,8 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         watcher.cancel()
+        for t in bg:
+            t.cancel()
         ears.stop()
         if tg:
             await tg.updater.stop()
@@ -349,7 +438,7 @@ async def chat(body: ChatIn):
     async def send_photo(img: bytes) -> None:
         photo_ids.append(store_photo(img))
 
-    reply = await brain.chat(text, camera.photo, send_photo)
+    reply = await brain.chat(text, camera.photo, send_photo, "uygulama")
     return {"reply": reply, "photos": [f"/api/photos/{p}" for p in photo_ids]}
 
 
@@ -374,7 +463,7 @@ async def chat_photo(body: ChatPhotoIn):
         photo_ids.append(store_photo(p))
 
     reply = await brain.chat(f"[Sana bir fotoğraf gönderdim. Gözlerin şunu görüyor: {seen}]\n{caption}",
-                             camera.photo, send_photo)
+                             camera.photo, send_photo, "uygulama")
     return {"reply": reply, "photos": [f"/api/photos/{p}" for p in photo_ids]}
 
 
@@ -440,6 +529,16 @@ async def privacy(body: PrivacyIn):
     if body.mic is not None:
         ears.set_enabled(body.mic)
     return {"camera": camera.enabled, "mic": ears.enabled}
+
+
+@api.get("/api/self", dependencies=auth)
+async def self_info():
+    """Robotun kendini nasıl gördüğü: beden durumu, kimliği, son günlüğü."""
+    f = brain.IDENTITY_FILE
+    diaries = brain.recent_diaries(1)
+    return {"body": body.snapshot(), "state": self_state(),
+            "identity": f.read_text(encoding="utf-8") if f.exists() else "",
+            "diary": {"day": diaries[-1][0], "text": diaries[-1][1]} if diaries else None}
 
 
 @api.get("/api/ears", dependencies=auth)
