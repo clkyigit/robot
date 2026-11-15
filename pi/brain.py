@@ -167,7 +167,8 @@ async def gemini_generate(contents, timeout: float = 25):
         except Exception as e:  # noqa: BLE001
             low = str(e).lower()
             retryable = isinstance(e, asyncio.TimeoutError) or any(
-                k in low for k in ("503", "unavailable", "high demand", "overloaded", "404", "not_found", "not found"))
+                k in low for k in ("503", "unavailable", "high demand", "overloaded", "404", "not_found", "not found",
+                                 "429", "resource_exhausted", "quota"))
             log.warning("Gemini %s olmadı: %s", m, str(e)[:120])
             last = e
             if not retryable:
