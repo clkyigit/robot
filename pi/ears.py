@@ -86,6 +86,13 @@ def known_word(model, model_dir: pathlib.Path, word: str) -> bool | None:
     return None
 
 
+def has_wake(text: str) -> bool:
+    """Yazıya çevrilmiş metnin ilk kelimelerinde uyandırma kelimesi (ya da çok benzeri) var mı?"""
+    import difflib
+    words = re.findall(r"\w+", text.lower())[:4]
+    return any(difflib.SequenceMatcher(None, w, k).ratio() >= 0.7 for w in words for k in WAKE_WORDS)
+
+
 def strip_wake(text: str) -> str:
     """Yazıya çevrilmiş metnin başındaki uyandırma kelimesini atar: 'Robot, saat kaç?' -> 'saat kaç?'"""
     words = "|".join(re.escape(w) for w in WAKE_WORDS)

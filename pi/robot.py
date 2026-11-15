@@ -26,7 +26,7 @@ log = logging.getLogger("robot")
 
 import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
-from ears import ears, strip_wake  # noqa: E402
+from ears import WAKE_WORDS, ears, has_wake, strip_wake  # noqa: E402
 import body  # noqa: E402
 
 BASE = pathlib.Path(__file__).resolve().parent
@@ -39,6 +39,8 @@ STARTED = time.time()
 
 TG = None  # Telegram uygulaması (kulakların cevabı sahibine yazabilmesi için)
 EARS_NOTIFY_WAKE = os.environ.get("EARS_NOTIFY_WAKE", "1").strip() != "0"
+EARS_VERIFY = os.environ.get("EARS_VERIFY", "1").strip() != "0"   # yazıda da kelime yoksa yanlış alarm say
+_wake_msg = None   # silinebilsin diye son "Dinliyorum" mesajı
 # Sesli konuşmaların son kayıtları (uygulama /api/ears ile görür)
 VOICE_LOG: list = []
 
@@ -260,31 +262,49 @@ def ears_line() -> str:
     return f"👂 Kulak: çalışmıyor ({st['error'] or 'başlıyor'})"
 
 
-async def tell_owner(text: str = "", photo: bytes | None = None) -> None:
+async def tell_owner(text: str = "", photo: bytes | None = None):
+    """Sahibine Telegram'dan yazar; son gönderilen mesajı döner."""
     oid = owner_id()
     if not TG or oid is None:
-        return
+        return None
+    msg = None
     try:
         if photo is not None:
-            await TG.bot.send_photo(oid, photo)
+            msg = await TG.bot.send_photo(oid, photo)
         for i in range(0, len(text), 4000):
-            await TG.bot.send_message(oid, text[i:i + 4000])
+            msg = await TG.bot.send_message(oid, text[i:i + 4000])
     except Exception as e:  # noqa: BLE001
         log.warning("Telegram'a yazılamadı: %s", e)
+    return msg
 
 
 async def on_wake() -> None:
+    global _wake_msg
     if EARS_NOTIFY_WAKE:
-        await tell_owner("👂 Dinliyorum...")
+        _wake_msg = await tell_owner("👂 Dinliyorum...")
+
+
+async def _drop_wake_msg() -> None:
+    global _wake_msg
+    if _wake_msg is not None:
+        with contextlib.suppress(Exception):
+            await _wake_msg.delete()
+    _wake_msg = None
 
 
 async def on_heard(wav: bytes) -> None:
     """Uyandırma kelimesinden sonra söylenen cümle: yazıya çevir, düşün, cevabı sahibine yaz."""
+    w = WAKE_WORDS[0].capitalize()
     try:
-        text = strip_wake(await brain.transcribe(wav))
+        raw = await brain.transcribe(wav, hint=f"{w}, saat kaç? {w}, bugün hava nasıl?")
     except Exception as e:  # noqa: BLE001
         await tell_owner(f"🎤 Seni duydum ama sesi yazıya çeviremedim: {e}")
         return
+    if EARS_VERIFY and raw and not has_wake(raw):
+        log.info("Yanlış alarm sayıldı (kelime yazıda yok): %s", raw[:80])
+        await _drop_wake_msg()
+        return
+    text = strip_wake(raw)
     if not text:
         await tell_owner("🎤 Efendim? Seslendin ama devamını anlayamadım.")
         return

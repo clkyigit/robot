@@ -461,20 +461,22 @@ async def describe_image(img: bytes, question: str) -> str:
 # ---------------------------------------------------------------- duyma (sesi yazıya çevirme)
 
 STT_MODELS = [m.strip() for m in os.environ.get(
-    "OPENAI_STT_MODELS", "gpt-4o-mini-transcribe,whisper-1").split(",") if m.strip()]
+    "OPENAI_STT_MODELS", "gpt-4o-transcribe,gpt-4o-mini-transcribe,whisper-1").split(",") if m.strip()]
 # Sessiz kayıtta Whisper'ın uydurduğu bilinen cümleler
 _STT_JUNK = ("altyazı m.k", "abone olmayı unutmayın", "izlediğiniz için teşekkür", "altyazı:", "www.")
 
 
-async def transcribe(wav: bytes) -> str:
-    """Türkçe ses kaydını yazıya çevirir: önce OpenAI, olmazsa Gemini. Konuşma yoksa boş döner."""
+async def transcribe(wav: bytes, hint: str = "") -> str:
+    """Türkçe ses kaydını yazıya çevirir: önce OpenAI, olmazsa Gemini. Konuşma yoksa boş döner.
+    hint: modele ipucu (ör. 'Robot, saat kaç?') — uyandırma kelimesinin doğru yazılmasına yardım eder."""
     failures = []
     text = None
     if openai_client:
         for m in STT_MODELS:
             try:
                 resp = await asyncio.wait_for(openai_client.audio.transcriptions.create(
-                    model=m, file=("ses.wav", wav, "audio/wav"), language="tr"), timeout=30)
+                    model=m, file=("ses.wav", wav, "audio/wav"), language="tr",
+                    **({"prompt": hint} if hint else {})), timeout=30)
                 text = (resp.text or "").strip()
                 break
             except Exception as e:  # noqa: BLE001
@@ -485,7 +487,8 @@ async def transcribe(wav: bytes) -> str:
             resp = await gemini_generate([
                 gtypes.Part.from_bytes(data=wav, mime_type="audio/wav"),
                 "Bu ses kaydında konuşulanı Türkçe olarak aynen yazıya dök. Sadece söyleneni yaz, "
-                "yorum ekleme. Konuşma yoksa hiçbir şey yazma."], timeout=40)
+                "yorum ekleme. Konuşma yoksa hiçbir şey yazma." + (f" Örnek biçim: {hint}" if hint else "")],
+                timeout=40)
             text = (resp.text or "").strip()
         except Exception as e:  # noqa: BLE001
             failures.append(f"gemini: {explain_error(e)}")
