@@ -1,0 +1,22 @@
+# Gizli ve kişisel dosyalar: ASLA repoya girmez
+.env
+*.env
+pi/.env
+pi/memory.json
+pi/memory.tmp
+pi/owner.json
+pi/persona.md
+*.jpg
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.keystore
+*.jks

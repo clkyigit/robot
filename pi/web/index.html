@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot</title>
+<style>
+  :root { --bg:#14161c; --card:#1e2129; --text:#e8e8ea; --muted:#9a9ca6; --accent:#5dcaa5; --me:#2c4a6e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:12px 16px; display:flex; justify-content:space-between; align-items:center; background:var(--card); }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  #status { font-size:12px; color:var(--muted); }
+  main { max-width:640px; margin:0 auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  .card { background:var(--card); border-radius:12px; padding:12px; }
+  #cam { width:100%; border-radius:8px; background:#000; min-height:120px; display:block; }
+  .row { display:flex; gap:8px; }
+  button { background:var(--accent); color:#06281f; border:0; border-radius:8px; padding:10px 14px; font-size:15px; font-weight:600; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid #3a3d48; }
+  input { flex:1; background:#0f1116; color:var(--text); border:1px solid #3a3d48; border-radius:8px; padding:10px; font-size:15px; }
+  #log { display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow-y:auto; }
+  .msg { padding:8px 12px; border-radius:12px; max-width:85%; white-space:pre-wrap; line-height:1.4; }
+  .me { align-self:flex-end; background:var(--me); }
+  .bot { align-self:flex-start; background:#2a2d36; }
+  .msg img { max-width:100%; border-radius:8px; margin-top:6px; display:block; }
+  #err { color:#f09595; font-size:13px; min-height:1em; }
+</style>
+</head>
+<body>
+<header><h1>🤖 Robot</h1><span id="status">bağlanıyor…</span></header>
+<main>
+  <div class="card" id="login" hidden>
+    <p>Erişim anahtarını gir (.env dosyasındaki API_TOKEN):</p>
+    <div class="row"><input id="tok" type="password" autocomplete="off"><button id="save">Kaydet</button></div>
+  </div>
+
+  <div class="card">
+    <img id="cam" alt="Kamera kapalı">
+    <div class="row" style="margin-top:8px">
+      <button id="live" class="ghost">▶ Canlı</button>
+      <button id="look" class="ghost">👁 Bak ve anlat</button>
+      <button id="priv" class="ghost">🔒 Kamerayı kapat</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="log"></div>
+    <div id="err"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="text" placeholder="Robota yaz…" autocomplete="off">
+      <button id="send">Gönder</button>
+    </div>
+  </div>
+</main>
+<script>
+let token = '';
+try { token = localStorage.getItem('robot_token') || ''; } catch (e) {}
+const $ = id => document.getElementById(id);
+let camOn = true, streaming = false;
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } });
+  if (r.status === 401) { $('login').hidden = false; throw new Error('Anahtar geçersiz'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+const withTok = p => p + (p.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+
+function add(cls, text, photos = []) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  photos.forEach(p => { const i = document.createElement('img'); i.src = withTok(p); d.appendChild(i); });
+  $('log').appendChild(d);
+  $('log').scrollTop = $('log').scrollHeight;
+  return d;
+}
+
+async function refresh() {
+  try {
+    const s = await api('/api/status');
+    const models = Object.entries(s.models).filter(([, v]) => v.active).map(([k]) => k).join(', ');
+    $('status').textContent = `${models || 'model yok'} · ${s.cpu_temp ? s.cpu_temp.toFixed(0) + '°C' : ''}`;
+    camOn = s.camera.enabled;
+    $('priv').textContent = camOn ? '🔒 Kamerayı kapat' : '🔓 Kamerayı aç';
+    $('login').hidden = true;
+  } catch (e) { $('status').textContent = 'bağlantı yok'; }
+}
+
+async function send() {
+  const text = $('text').value.trim();
+  if (!text) { $('err').textContent = 'Önce bir mesaj yaz'; return; }
+  $('err').textContent = '';
+  $('text').value = '';
+  add('me', text);
+  const wait = add('bot', '…');
+  try {
+    const r = await api('/api/chat', { method: 'POST', body: JSON.stringify({ text }) });
+    wait.remove();
+    add('bot', r.reply, r.photos);
+  } catch (e) { wait.remove(); $('err').textContent = e.message; }
+}
+
+$('send').onclick = send;
+$('text').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+$('text').addEventListener('input', () => { $('err').textContent = ''; });
+$('save').onclick = () => {
+  token = $('tok').value.trim();
+  try { localStorage.setItem('robot_token', token); } catch (e) {}
+  refresh();
+};
+$('live').onclick = () => {
+  streaming = !streaming;
+  $('cam').src = streaming ? withTok('/api/stream') : '';
+  $('live').textContent = streaming ? '⏸ Durdur' : '▶ Canlı';
+};
+$('look').onclick = async () => {
+  const wait = add('bot', 'Bakıyorum…');
+  try {
+    const r = await api('/api/look', { method: 'POST', body: JSON.stringify({ question: 'Ne görüyorsun?' }) });
+    wait.remove();
+    add('bot', r.description, [r.photo]);
+  } catch (e) { wait.remove(); $('err').textContent = e.message; }
+};
+$('priv').onclick = async () => {
+  try {
+    const r = await api('/api/privacy', { method: 'POST', body: JSON.stringify({ camera: !camOn }) });
+    camOn = r.camera;
+    if (!camOn && streaming) $('live').click();
+    refresh();
+  } catch (e) { $('err').textContent = e.message; }
+};
+
+if (!token) $('login').hidden = false;
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

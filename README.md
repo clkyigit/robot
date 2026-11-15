@@ -1,0 +1,80 @@
+# 🤖 Robot
+
+Raspberry Pi 5 üzerinde çalışan, kendi kendini tasarlayan küçük bir masa robotu.
+
+- **Beyin:** Claude (sohbet, kişilik, araçlar) + Gemini (görme) + OpenAI (yedek)
+- **Göz:** Raspberry Pi Camera Module 3
+- **İletişim:** Telegram botu, tarayıcı arayüzü ve Android uygulaması (yolda)
+- **Yakında:** yuvarlak/küçük DSI ekranda yüz, mikrofon + hoparlör, servolarla baş hareketi
+
+## Klasörler
+
+| Klasör | İçerik |
+|---|---|
+| `pi/` | Pi'de çalışan her şey: beyin, kamera, uygulama sunucusu, Telegram botu |
+| `pi/web/` | Telefon tarayıcısından kullanılan test arayüzü |
+| `android/` | Android uygulaması (sırada) |
+
+## Pi'ye kurulum
+
+```bash
+sudo apt install -y git
+git clone https://github.com/clkyigit/robot ~/robot-repo
+bash ~/robot-repo/pi/kurulum.sh
+```
+
+Kurulum betiği:
+1. Gerekli paketleri kurar,
+2. Eski `~/robot` klasöründeki `.env`, hafıza ve kişilik dosyalarını taşır,
+3. Uygulama için bir erişim anahtarı (`API_TOKEN`) üretir,
+4. Robotu, Pi açılınca kendiliğinden başlayan bir servis olarak kurar.
+
+Sonra telefonun tarayıcısında `http://PI_IP_ADRESI:8080` adresini aç ve anahtarı gir.
+
+### Güncelleme
+
+```bash
+cd ~/robot-repo && git pull && sudo systemctl restart robot
+```
+
+### Kayıtları izleme
+
+```bash
+journalctl -u robot -f
+```
+
+## `.env` dosyası
+
+`pi/.env` içinde (repoya **yüklenmez**):
+
+```
+TELEGRAM_TOKEN=...
+ANTHROPIC_API_KEY=...
+GEMINI_API_KEY=...
+OPENAI_API_KEY=...
+API_TOKEN=...          # kurulum betiği üretir
+```
+
+İsteğe bağlı: `CLAUDE_MODEL`, `CLAUDE_FAST_MODEL`, `GEMINI_MODEL`, `OPENAI_MODEL`, `ROBOT_PORT` (varsayılan 8080).
+
+## Uygulama API'si
+
+Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.
+
+| Yöntem | Yol | Ne yapar |
+|---|---|---|
+| GET | `/api/status` | Modeller, Pi sıcaklığı, kamera durumu |
+| POST | `/api/chat` | `{"text": "..."}` → `{"reply", "photos"}` |
+| POST | `/api/look` | Fotoğraf çekip anlatır |
+| GET | `/api/photo` | Anlık fotoğraf (JPEG) |
+| GET | `/api/stream` | Canlı görüntü (MJPEG) |
+| GET | `/api/memory` | Kalıcı hatıralar ve sohbet geçmişi |
+| DELETE | `/api/history` | Sohbet geçmişini temizler |
+| POST | `/api/privacy` | `{"camera": false}` → kamerayı kapatır |
+
+## Gizlilik
+
+- Sadece ilk yazan Telegram hesabına cevap verir.
+- API anahtarsız hiçbir şey döndürmez.
+- Kamera kullanılmadığında 30 saniye sonra kendiliğinden kapanır; gizlilik anahtarıyla tamamen kapatılabilir.
+- `.env`, `memory.json`, `owner.json` ve `persona.md` repoya hiçbir zaman yüklenmez.
