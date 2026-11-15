@@ -454,7 +454,8 @@ def search_past(query: str = "", date: str = "") -> str:
 
 async def describe_image(img: bytes, question: str) -> str:
     """Görüntüyü anlatır: önce Gemini, olmazsa Claude, o da olmazsa OpenAI. Hata fırlatmaz."""
-    prompt = (f"Bu görüntü bir masa robotunun kamerasından ya da sahibinden geldi. Türkçe ve kısaca anlat. "
+    prompt = (f"Bu görüntü bir masa robotunun kamerasından ya da sahibinden geldi. Türkçe anlat; "
+              f"görüntüde yazı varsa onu da aktar, ama gereksiz uzatma. "
               f"Özellikle şu soruya odaklan: {question}")
     b64 = base64.b64encode(img).decode()
 
@@ -464,7 +465,7 @@ async def describe_image(img: bytes, question: str) -> str:
 
     async def with_claude():
         resp = await claude.messages.create(
-            model=CLAUDE_MODEL, max_tokens=600,
+            model=CLAUDE_MODEL, max_tokens=1500,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
                 {"type": "text", "text": prompt}]}])
