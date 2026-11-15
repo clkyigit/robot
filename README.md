@@ -81,6 +81,18 @@ yazıya çevirir (OpenAI, olmazsa Gemini), cevabı Telegram'a yazar. Telegram'da
 - Telegram: `/gunluk`, `/gunluk yaz`, `/gunluk 2026-11-15`, `/kimlik`. Uygulama: `GET /api/self`.
 - `gunluk/` ve `kimlik.md` kişiseldir, repoya girmez.
 
+## Kendiliğinden davranma (iç ses)
+
+Robot arada bir kendi kendine düşünür ve sahibine yazmak isteyip istemediğine kendisi karar verir:
+- **Sabah** (`MORNING_TIME`, 08:30): o gün henüz konuşulmadıysa, dünkü günlüğünü de hatırlayarak.
+- **Sessizlik**: `SILENCE_HOURS` (6) saattir konuşulmadıysa (günde bir kez, 10:00–21:00).
+- **Biri geldi**: kamera her `PRESENCE_EVERY` (60) saniyede küçük bir kareye bakar (tamamen Pi'de, API'siz);
+  `ARRIVE_AFTER_MIN` (30) dakika hareketsizlikten sonra hareket olursa fotoğraf çekip görme modeliyle bakar,
+  biri varsa ne diyeceğine karar verir (en fazla 2 saatte bir). Sıcaklık 72 °C üstündeyse kameraya bakmaz.
+
+Varsayılan olarak sessiz saat ve günlük sınır yoktur; istenirse `QUIET_HOURS=23-8`, `MAX_INITIATIVES=5`.
+Telegram: `/oto`, `/oto ac`, `/oto kapat`, `/oto kamera`. Kapalı başlatmak için `INITIATIVE=0`, hareket algılamasız `PRESENCE=0`.
+
 ## Uygulama API'si
 
 Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.

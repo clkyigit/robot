@@ -72,6 +72,7 @@ STATE_PROVIDER: Optional[Callable[[], str]] = None
 CHANNELS = {
     "telegram": "Telegram'dan yazdı.",
     "uygulama": "Telefon uygulamasından yazdı.",
+    "kendiliğinden": "Aslında sahibin sana yazmadı; bu senin iç sesin, kendiliğinden düşünüyorsun.",
     "ses": "Sana sesli söyledi; mikrofonun duydu ve yazıya çevrildi, çeviride küçük hatalar olabilir. "
            "Henüz hoparlörün yok, cevabın Telegram'a yazı olarak gidecek; yine de konuşur gibi kısa cevap ver.",
 }
@@ -340,6 +341,36 @@ async def complete(system: str, prompt: str, max_tokens: int = 1200) -> str:
         resp = await gemini_generate(f"{system}\n\n{prompt}", timeout=120)
         return (resp.text or "").strip()
     raise RuntimeError("Düşünecek model yok")
+
+
+async def initiative(event: str) -> str | None:
+    """İç ses: bir olay oldu, robot sahibine kendiliğinden yazmak istiyor mu? İstemiyorsa None."""
+    async with _think_lock:
+        mem = load_memory()
+        system = system_prompt(mem, "kendiliğinden")
+        recent = "\n".join(f"{'Sahibim' if m['role'] == 'user' else 'Ben'}: {_clip(m['content'], 300)}"
+                           for m in mem["history"][-6:]) or "(yakın zamanda konuşma yok)"
+        prompt = (f"Son konuşmalar:\n{recent}\n\nŞimdi şu oldu: {event}\n\n"
+                  "Sahibine kendiliğinden kısa bir mesaj göndermek ister misin? Ancak gerçekten anlamlı, sıcak ya da "
+                  "işe yarar bir şey söyleyeceksen yaz; her olayda yazmak zorunda değilsin, rahatsız etme. "
+                  "Yazacaksan 1-2 cümle, doğal ve samimi ol, robot gibi rapor verme. "
+                  "Yazmak istemiyorsan sadece SESSİZ yaz.")
+        try:
+            text = (await complete(system, prompt, 300)).strip()
+        except Exception as e:  # noqa: BLE001
+            log.warning("İç ses düşünemedi: %s", e)
+            return None
+        if not text or text.upper().replace("İ", "I").startswith("SESSIZ"):
+            return None
+        mem = load_memory()
+        mem["history"] += [{"role": "user", "content": f"[İç ses, sahibin yazmadı: {event}]"},
+                           {"role": "assistant", "content": text}]
+        save_memory(mem)
+        try:
+            log_event("assistant", text, "kendiliğinden")
+        except OSError:
+            pass
+        return text
 
 
 async def write_diary(day: str | None = None) -> str | None:

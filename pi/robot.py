@@ -28,6 +28,7 @@ import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
 from ears import WAKE_WORDS, ears, has_wake, strip_wake  # noqa: E402
 import body  # noqa: E402
+from initiative import initiative  # noqa: E402
 
 BASE = pathlib.Path(__file__).resolve().parent
 WEB_DIR = BASE / "web"
@@ -140,7 +141,7 @@ def build_telegram():
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             await update.message.reply_text("Buradayım. Bana yazabilir, fotoğraf gönderebilirsin. "
-                                            "Komutlar: /foto /hafiza /gunluk /kimlik /sifirla /durum /test /dinle /sus")
+                                            "Komutlar: /foto /hafiza /gunluk /kimlik /sifirla /durum /test /dinle /sus /oto")
 
     async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
@@ -217,6 +218,19 @@ def build_telegram():
         await reply_long(update, f"🪞 Kendimi şöyle tanıyorum:\n\n{text}" if text else
                          "Kendimi henüz tanımıyorum. İlk günlüğümü yazınca burası dolmaya başlayacak.")
 
+    async def cmd_oto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        arg = (context.args[0].lower() if context.args else "")
+        if arg in ("ac", "aç", "on"):
+            initiative.enabled = True
+        elif arg in ("kapat", "off"):
+            initiative.enabled = False
+        elif arg in ("kamera", "goz", "göz"):
+            initiative.presence_on = not initiative.presence_on
+        await update.message.reply_text(
+            oto_line() + "\n\n/oto ac · /oto kapat · /oto kamera (hareket algılamayı aç/kapat)")
+
     async def cmd_sus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             ears.set_enabled(False)
@@ -231,6 +245,7 @@ def build_telegram():
             lines.append(f"🌡️ {t:.1f} °C")
         lines.append(f"📷 Kamera: {'açık' if camera.enabled else 'kapalı (gizlilik)'}")
         lines.append(ears_line())
+        lines.append(oto_line())
         await update.message.reply_text("\n".join(lines))
 
     app = (Application.builder().token(TELEGRAM_TOKEN)
@@ -242,6 +257,7 @@ def build_telegram():
     app.add_handler(CommandHandler("durum", cmd_durum))
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("dinle", cmd_dinle))
+    app.add_handler(CommandHandler("oto", cmd_oto))
     app.add_handler(CommandHandler("gunluk", cmd_gunluk))
     app.add_handler(CommandHandler("kimlik", cmd_kimlik))
     app.add_handler(CommandHandler("sus", cmd_sus))
@@ -260,6 +276,17 @@ def ears_line() -> str:
     if st["running"]:
         return f"👂 Kulak: dinliyor (\"{st['wake_words'][0]}\" de)"
     return f"👂 Kulak: çalışmıyor ({st['error'] or 'başlıyor'})"
+
+
+def oto_line() -> str:
+    st = initiative.status()
+    if not st["enabled"]:
+        return "💭 Kendiliğinden davranma: kapalı (/oto ac)"
+    eye = "açık" if st["presence"] else "kapalı"
+    extra = f", son olay {st['last_event']}" if st["last_event"] else ""
+    quiet = f", {st['quiet_hours']} arası sessiz" if st["quiet_hours"] else ""
+    return (f"💭 Kendiliğinden davranma: açık (bugün {st['today']} mesaj{quiet}, "
+            f"hareket algılama {eye}{extra})")
 
 
 async def tell_owner(text: str = "", photo: bytes | None = None):
@@ -373,6 +400,11 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
     ears.start(asyncio.get_running_loop(), on_heard, on_wake)
     bg = [asyncio.create_task(diary_loop()), asyncio.create_task(body_watch())]
+
+    async def keep_photo(img: bytes) -> None:
+        store_photo(img)
+
+    bg += initiative.start(tell_owner, camera, keep_photo)
     st = brain.model_status()
     log.info("Robot başladı. Claude=%s Gemini=%s OpenAI=%s Telegram=%s API=%s port=%d",
              st["claude"]["active"], st["gemini"]["active"], st["openai"]["active"],
@@ -438,6 +470,7 @@ async def status():
         "uptime_s": int(time.time() - STARTED),
         "camera": {"enabled": camera.enabled, "active": camera.active},
         "ears": ears.status(),
+        "initiative": initiative.status(),
     }
 
 
