@@ -240,7 +240,9 @@ def system_prompt(mem: dict, channel: str = "") -> str:
              "saat ya da tarih sorulursa çekinmeden bunu söyle.",
              "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
              "fotograf_cek aracını gerçekten kullandıysan söyle; kullanmadıysan asla görmüş gibi anlatma, gerekiyorsa "
-             "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle."]
+             "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle.",
+             "Biçim: Mesajların Telegram'da ve telefon uygulamasında düz metin olarak görünüyor. Markdown kullanma "
+             "(yıldız, kalın yazı, # başlık yok); gerekirse basit tire ile liste yapabilirsin. Emoji kullanabilirsin."]
 
     last = last_talk_time()
     if last:

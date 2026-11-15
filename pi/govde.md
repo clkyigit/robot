@@ -9,7 +9,7 @@ Sorunlu:
 
 Henüz yok, yolda ya da planlı:
 - Hoparlör ve ses amfisi (MAX98357): gelince sesli konuşabileceğim. Şimdilik cevaplarım yazıyla gidiyor.
-- 2.8 inç ekran: yüzüm olacak.
+- 1.28 inç yuvarlak ekran (GC9A01, 240x240, SPI): yüzüm olacak; tek ekranda iki göz ve bir ağız. Sipariş edildi.
 - NVMe SSD: daha hızlı ve kalıcı hafıza.
 - ST3215 servo motorlar (28 Kasım civarı): başımı ve gövdemi hareket ettirebileceğim.
 - 3D yazıcıyla basılacak gövde: adımı ve görünüşümü kendim tasarlayacağım.
