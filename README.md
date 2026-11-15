@@ -78,3 +78,16 @@ Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gere
 - API anahtarsız hiçbir şey döndürmez.
 - Kamera kullanılmadığında 30 saniye sonra kendiliğinden kapanır; gizlilik anahtarıyla tamamen kapatılabilir.
 - `.env`, `memory.json`, `owner.json` ve `persona.md` repoya hiçbir zaman yüklenmez.
+
+## Android uygulaması
+
+`android/` klasöründeki her değişiklikte GitHub Actions APK'yı otomatik derler ve
+[son sürüm sayfasına](https://github.com/clkyigit/robot/releases/tag/son-surum) koyar.
+Telefondan oradan `robot.apk`'yı indirip kur. Uygulamada **Ayarlar** sekmesine robotun
+adresini (`http://PI_IP:8080`) ve `API_TOKEN` anahtarını gir.
+
+API anahtarları (Claude, Gemini, OpenAI) uygulamada **yoktur**; hepsi Pi'de kalır.
+Uygulama sadece Pi'deki sunucuyla konuşur.
+
+> `android/app/debug.keystore` herkese açık standart bir test anahtarıdır; her APK'nın
+> eskisinin üzerine kurulabilmesi için sabit tutulur. Gizli bir şey değildir.
