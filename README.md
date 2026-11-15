@@ -57,6 +57,19 @@ API_TOKEN=...          # kurulum betiği üretir
 
 İsteğe bağlı: `CLAUDE_MODEL`, `CLAUDE_FAST_MODEL`, `GEMINI_MODELS` (virgülle ayrılmış, sırayla denenir), `OPENAI_MODEL`, `ROBOT_PORT` (varsayılan 8080).
 
+## Kulaklar (mikrofon)
+
+INMP441 I2S mikrofon: VDD→pin 1, GND→pin 6, L/R→GND, SCK→pin 12, WS→pin 35, SD→pin 38.
+`/boot/firmware/config.txt` içinde `dtoverlay=adau7002-simple` olmalı.
+
+Bir kez: `bash pi/kulak_kurulum.sh` (Vosk ve Türkçe ses modelini kurar).
+
+Robot uyandırma kelimesini (varsayılan **robot**) internetsiz algılar, sonraki cümleyi kaydedip
+yazıya çevirir (OpenAI, olmazsa Gemini), cevabı Telegram'a yazar. Telegram'da `/dinle` ve `/sus`.
+
+İsteğe bağlı ayarlar: `WAKE_WORDS`, `EARS=0`, `MIC_DEVICE`, `MIC_GAIN`, `EARS_NOTIFY_WAKE=0`,
+`OPENAI_STT_MODELS`. Not: robot dinlerken mikrofon meşguldür; `arecord` testi için önce `/sus`.
+
 ## Uygulama API'si
 
 Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.
@@ -71,7 +84,8 @@ Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gere
 | GET | `/api/stream` | Canlı görüntü (MJPEG) |
 | GET | `/api/memory` | Kalıcı hatıralar ve sohbet geçmişi |
 | DELETE | `/api/history` | Sohbet geçmişini temizler |
-| POST | `/api/privacy` | `{"camera": false}` → kamerayı kapatır |
+| POST | `/api/privacy` | `{"camera": false}` → kamerayı, `{"mic": false}` → kulakları kapatır |
+| GET | `/api/ears` | Kulakların durumu ve son sesli konuşmalar |
 
 ## Gizlilik
 

@@ -255,6 +255,44 @@ async def describe_image(img: bytes, question: str) -> str:
     return "Fotoğrafı çektim ama anlatamadım. " + "; ".join(failures)
 
 
+# ---------------------------------------------------------------- duyma (sesi yazıya çevirme)
+
+STT_MODELS = [m.strip() for m in os.environ.get(
+    "OPENAI_STT_MODELS", "gpt-4o-mini-transcribe,whisper-1").split(",") if m.strip()]
+# Sessiz kayıtta Whisper'ın uydurduğu bilinen cümleler
+_STT_JUNK = ("altyazı m.k", "abone olmayı unutmayın", "izlediğiniz için teşekkür", "altyazı:", "www.")
+
+
+async def transcribe(wav: bytes) -> str:
+    """Türkçe ses kaydını yazıya çevirir: önce OpenAI, olmazsa Gemini. Konuşma yoksa boş döner."""
+    failures = []
+    text = None
+    if openai_client:
+        for m in STT_MODELS:
+            try:
+                resp = await asyncio.wait_for(openai_client.audio.transcriptions.create(
+                    model=m, file=("ses.wav", wav, "audio/wav"), language="tr"), timeout=30)
+                text = (resp.text or "").strip()
+                break
+            except Exception as e:  # noqa: BLE001
+                failures.append(f"openai {m}: {explain_error(e)}")
+                log.warning("Yazıya çevirme (%s) olmadı: %s", m, e)
+    if text is None and gemini:
+        try:
+            resp = await gemini_generate([
+                gtypes.Part.from_bytes(data=wav, mime_type="audio/wav"),
+                "Bu ses kaydında konuşulanı Türkçe olarak aynen yazıya dök. Sadece söyleneni yaz, "
+                "yorum ekleme. Konuşma yoksa hiçbir şey yazma."], timeout=40)
+            text = (resp.text or "").strip()
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"gemini: {explain_error(e)}")
+    if text is None:
+        raise RuntimeError("; ".join(failures) or "Sesi yazıya çevirecek model yok")
+    if any(j in text.lower() for j in _STT_JUNK):
+        return ""
+    return text
+
+
 # ---------------------------------------------------------------- araçlar
 
 TOOLS = [

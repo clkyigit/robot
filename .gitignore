@@ -21,3 +21,7 @@ android/local.properties
 *.keystore
 !android/app/debug.keystore
 *.jks
+
+# Ses modelleri ve kayıtlar
+pi/models/
+*.wav

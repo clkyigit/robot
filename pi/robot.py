@@ -26,6 +26,7 @@ log = logging.getLogger("robot")
 
 import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
+from ears import ears, strip_wake  # noqa: E402
 
 BASE = pathlib.Path(__file__).resolve().parent
 WEB_DIR = BASE / "web"
@@ -34,6 +35,11 @@ API_TOKEN = os.environ.get("API_TOKEN", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 PORT = int(os.environ.get("ROBOT_PORT", "8080"))
 STARTED = time.time()
+
+TG = None  # Telegram uygulaması (kulakların cevabı sahibine yazabilmesi için)
+EARS_NOTIFY_WAKE = os.environ.get("EARS_NOTIFY_WAKE", "1").strip() != "0"
+# Sesli konuşmaların son kayıtları (uygulama /api/ears ile görür)
+VOICE_LOG: list = []
 
 # Uygulamaya gönderilen son fotoğraflar (bellekte, en fazla 20)
 PHOTOS: "OrderedDict[str, bytes]" = OrderedDict()
@@ -54,6 +60,12 @@ def cpu_temp() -> float | None:
         return None
 
 
+def owner_id():
+    if OWNER_FILE.exists():
+        return json.loads(OWNER_FILE.read_text())["id"]
+    return None
+
+
 # ================================================================ Telegram
 
 def build_telegram():
@@ -64,11 +76,6 @@ def build_telegram():
     from telegram import Update
     from telegram.constants import ChatAction
     from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-
-    def owner_id():
-        if OWNER_FILE.exists():
-            return json.loads(OWNER_FILE.read_text())["id"]
-        return None
 
     async def guard(update: Update) -> bool:
         uid = update.effective_user.id
@@ -109,7 +116,7 @@ def build_telegram():
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             await update.message.reply_text("Buradayım. Bana yazabilir, fotoğraf gönderebilirsin. "
-                                            "Komutlar: /foto /hafiza /sifirla /durum /test")
+                                            "Komutlar: /foto /hafiza /sifirla /durum /test /dinle /sus")
 
     async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
@@ -151,6 +158,21 @@ def build_telegram():
         res = await brain.self_test()
         await update.message.reply_text("\n".join(health_line(k, v) for k, v in res.items()))
 
+    async def cmd_dinle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        ears.set_enabled(True)
+        st = ears.status()
+        if st["error"] and not st["running"]:
+            await update.message.reply_text(f"Kulaklarımı açmaya çalıştım ama: {st['error']}")
+        else:
+            await update.message.reply_text(f"👂 Dinliyorum. Bana seslenmek için \"{st['wake_words'][0]}\" de.")
+
+    async def cmd_sus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if await guard(update):
+            ears.set_enabled(False)
+            await update.message.reply_text("🙉 Kulaklarımı kapattım. Açmak için /dinle")
+
     async def cmd_durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
@@ -159,6 +181,7 @@ def build_telegram():
         if t is not None:
             lines.append(f"🌡️ {t:.1f} °C")
         lines.append(f"📷 Kamera: {'açık' if camera.enabled else 'kapalı (gizlilik)'}")
+        lines.append(ears_line())
         await update.message.reply_text("\n".join(lines))
 
     app = (Application.builder().token(TELEGRAM_TOKEN)
@@ -169,22 +192,81 @@ def build_telegram():
     app.add_handler(CommandHandler("sifirla", cmd_sifirla))
     app.add_handler(CommandHandler("durum", cmd_durum))
     app.add_handler(CommandHandler("test", cmd_test))
+    app.add_handler(CommandHandler("dinle", cmd_dinle))
+    app.add_handler(CommandHandler("sus", cmd_sus))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
+
+
+# ================================================================ kulaklar
+
+
+def ears_line() -> str:
+    st = ears.status()
+    if not st["enabled"]:
+        return "👂 Kulak: kapalı (/dinle)"
+    if st["running"]:
+        return f"👂 Kulak: dinliyor (\"{st['wake_words'][0]}\" de)"
+    return f"👂 Kulak: çalışmıyor ({st['error'] or 'başlıyor'})"
+
+
+async def tell_owner(text: str = "", photo: bytes | None = None) -> None:
+    oid = owner_id()
+    if not TG or oid is None:
+        return
+    try:
+        if photo is not None:
+            await TG.bot.send_photo(oid, photo)
+        for i in range(0, len(text), 4000):
+            await TG.bot.send_message(oid, text[i:i + 4000])
+    except Exception as e:  # noqa: BLE001
+        log.warning("Telegram'a yazılamadı: %s", e)
+
+
+async def on_wake() -> None:
+    if EARS_NOTIFY_WAKE:
+        await tell_owner("👂 Dinliyorum...")
+
+
+async def on_heard(wav: bytes) -> None:
+    """Uyandırma kelimesinden sonra söylenen cümle: yazıya çevir, düşün, cevabı sahibine yaz."""
+    try:
+        text = strip_wake(await brain.transcribe(wav))
+    except Exception as e:  # noqa: BLE001
+        await tell_owner(f"🎤 Seni duydum ama sesi yazıya çeviremedim: {e}")
+        return
+    if not text:
+        await tell_owner("🎤 Efendim? Seslendin ama devamını anlayamadım.")
+        return
+    ears.heard(text)
+    log.info("Sesli: %s", text)
+    photo_ids: list[str] = []
+
+    async def send_photo(img: bytes) -> None:
+        photo_ids.append(store_photo(img))
+        await tell_owner(photo=img)
+
+    reply = await brain.chat(text, camera.photo, send_photo)
+    VOICE_LOG.append({"at": time.time(), "heard": text, "reply": reply,
+                      "photos": [f"/api/photos/{p}" for p in photo_ids]})
+    del VOICE_LOG[:-20]
+    await tell_owner(f"🎤 {text}\n\n🤖 {reply}")
 
 
 # ================================================================ uygulama sunucusu
 
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI):
-    tg = build_telegram()
+    global TG
+    tg = TG = build_telegram()
     if tg:
         await tg.initialize()
         await tg.start()
         await tg.updater.start_polling()
     watcher = asyncio.create_task(camera.idle_watcher())
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
+    ears.start(asyncio.get_running_loop(), on_heard, on_wake)
     st = brain.model_status()
     log.info("Robot başladı. Claude=%s Gemini=%s OpenAI=%s Telegram=%s API=%s port=%d",
              st["claude"]["active"], st["gemini"]["active"], st["openai"]["active"],
@@ -193,6 +275,7 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         watcher.cancel()
+        ears.stop()
         if tg:
             await tg.updater.stop()
             await tg.stop()
@@ -230,7 +313,8 @@ class LookIn(BaseModel):
 
 
 class PrivacyIn(BaseModel):
-    camera: bool
+    camera: bool | None = None
+    mic: bool | None = None
 
 
 @api.get("/")
@@ -245,6 +329,7 @@ async def status():
         "cpu_temp": cpu_temp(),
         "uptime_s": int(time.time() - STARTED),
         "camera": {"enabled": camera.enabled, "active": camera.active},
+        "ears": ears.status(),
     }
 
 
@@ -350,8 +435,17 @@ async def delete_history():
 
 @api.post("/api/privacy", dependencies=auth)
 async def privacy(body: PrivacyIn):
-    await camera.set_enabled(body.camera)
-    return {"camera": camera.enabled}
+    if body.camera is not None:
+        await camera.set_enabled(body.camera)
+    if body.mic is not None:
+        ears.set_enabled(body.mic)
+    return {"camera": camera.enabled, "mic": ears.enabled}
+
+
+@api.get("/api/ears", dependencies=auth)
+async def ears_status():
+    """Kulakların durumu ve son sesli konuşmalar."""
+    return {**ears.status(), "log": VOICE_LOG}
 
 
 @api.exception_handler(Exception)
