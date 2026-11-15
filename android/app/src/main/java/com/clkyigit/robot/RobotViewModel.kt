@@ -93,19 +93,33 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Gönderilmeyi bekleyen fotoğraf (sohbet kutusunun üstünde önizlenir) */
+    var pendingPhoto by mutableStateOf<Bitmap?>(null)
+
+    fun attach(photo: Bitmap?) {
+        if (photo == null) {
+            error = "Fotoğraf açılamadı"
+            return
+        }
+        error = null
+        pendingPhoto = photo
+    }
+
     fun send(text: String): Boolean {
         val t = text.trim()
-        if (t.isEmpty()) {
-            error = "Önce bir mesaj yaz"
+        val photo = pendingPhoto
+        if (t.isEmpty() && photo == null) {
+            error = "Önce bir mesaj yaz ya da fotoğraf ekle"
             return false
         }
         if (thinking) return false
         error = null
-        messages.add(Msg(true, t))
+        pendingPhoto = null
+        messages.add(Msg(true, t, listOfNotNull(photo)))
         thinking = true
         viewModelScope.launch {
             try {
-                val r = api().chat(t)
+                val r = if (photo != null) api().chatPhoto(photo, t) else api().chat(t)
                 messages.add(Msg(false, r.text, r.photos))
             } catch (e: Exception) {
                 error = e.message ?: "Bağlantı hatası"

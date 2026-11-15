@@ -106,6 +106,19 @@ class RobotApi(baseUrl: String, private val token: String) {
         return Reply(r.getString("reply"), photos)
     }
 
+    /** Fotoğraf gönderir (isteğe bağlı mesajla). Fotoğraf göndermeden önce küçültülmüş olmalı. */
+    suspend fun chatPhoto(photo: Bitmap, text: String): Reply {
+        val b64 = withContext(Dispatchers.Default) {
+            val out = ByteArrayOutputStream()
+            photo.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        }
+        val r = postJson("/api/chat_photo", JSONObject().put("image", b64).put("text", text))
+        val paths = r.getJSONArray("photos")
+        val photos = (0 until paths.length()).mapNotNull { runCatching { bitmap(paths.getString(it)) }.getOrNull() }
+        return Reply(r.getString("reply"), photos)
+    }
+
     suspend fun look(question: String = "Ne görüyorsun?"): Reply {
         val r = postJson("/api/look", JSONObject().put("question", question))
         val photo = runCatching { bitmap(r.getString("photo")) }.getOrNull()

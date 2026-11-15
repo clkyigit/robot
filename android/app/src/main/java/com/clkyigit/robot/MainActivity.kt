@@ -1,8 +1,12 @@
 package com.clkyigit.robot
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,7 +32,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
@@ -56,7 +64,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -156,7 +166,7 @@ fun ChatScreen(vm: RobotViewModel) {
         ) {
             if (vm.messages.isEmpty() && !vm.thinking) {
                 item {
-                    Text("Robota bir şey yaz. Etrafına bakmasını da isteyebilirsin.",
+                    Text("Robota bir şey yaz ya da fotoğraf gönder. Etrafına bakmasını da isteyebilirsin.",
                         color = Color.Gray, modifier = Modifier.padding(top = 24.dp))
                 }
             }
@@ -169,11 +179,42 @@ fun ChatScreen(vm: RobotViewModel) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }
 
+        val context = LocalContext.current
+        val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri != null) vm.attach(loadScaledBitmap(context, uri))
+        }
+        var cameraUri by remember { mutableStateOf<Uri?>(null) }
+        val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            val u = cameraUri
+            if (ok && u != null) vm.attach(loadScaledBitmap(context, u))
+        }
+
+        vm.pendingPhoto?.let { photo ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Image(photo.asImageBitmap(), "Gönderilecek fotoğraf",
+                    Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                Text("Fotoğraf eklendi", color = Color.Gray, modifier = Modifier.padding(start = 8.dp).weight(1f))
+                IconButton(onClick = { vm.pendingPhoto = null }) { Icon(Icons.Filled.Close, "Fotoğrafı kaldır") }
+            }
+        }
+
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = {
+                pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }, enabled = !vm.thinking) {
+                Icon(Icons.Filled.Image, "Galeriden fotoğraf", tint = Accent)
+            }
+            IconButton(onClick = {
+                val u = newCameraUri(context)
+                cameraUri = u
+                takePhoto.launch(u)
+            }, enabled = !vm.thinking) {
+                Icon(Icons.Filled.PhotoCamera, "Fotoğraf çek", tint = Accent)
+            }
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it; vm.error = null },
-                placeholder = { Text("Robota yaz…") },
+                placeholder = { Text(if (vm.pendingPhoto != null) "Fotoğraf hakkında sor…" else "Robota yaz…") },
                 modifier = Modifier.weight(1f),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { if (vm.send(input)) input = "" }),
@@ -195,7 +236,7 @@ fun Bubble(m: Msg) {
                 .background(if (m.mine) MineBubble else BotBubble, RoundedCornerShape(14.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Text(m.text, color = Color(0xFFE8E8EA))
+            if (m.text.isNotEmpty()) Text(m.text, color = Color(0xFFE8E8EA))
             m.photos.forEach { bmp ->
                 Spacer(Modifier.height(6.dp))
                 Image(bmp.asImageBitmap(), null, Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)

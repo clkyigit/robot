@@ -220,6 +220,11 @@ class ChatIn(BaseModel):
     text: str
 
 
+class ChatPhotoIn(BaseModel):
+    image: str          # base64 JPEG
+    text: str = ""
+
+
 class LookIn(BaseModel):
     question: str = "Ne görüyorsun?"
 
@@ -260,6 +265,31 @@ async def chat(body: ChatIn):
         photo_ids.append(store_photo(img))
 
     reply = await brain.chat(text, camera.photo, send_photo)
+    return {"reply": reply, "photos": [f"/api/photos/{p}" for p in photo_ids]}
+
+
+@api.post("/api/chat_photo", dependencies=auth)
+async def chat_photo(body: ChatPhotoIn):
+    """Uygulamadan gönderilen fotoğrafa bakıp (istersen yazdığın mesajla birlikte) cevap verir."""
+    import base64
+    import binascii
+    try:
+        img = base64.b64decode(body.image, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Fotoğraf okunamadı")
+    if not img:
+        raise HTTPException(400, "Fotoğraf boş")
+    if len(img) > 8 * 1024 * 1024:
+        raise HTTPException(413, "Fotoğraf çok büyük (en fazla 8 MB)")
+    caption = body.text.strip() or "Bu fotoğrafa ne dersin?"
+    seen = await brain.describe_image(img, caption)
+    photo_ids: list[str] = []
+
+    async def send_photo(p: bytes) -> None:
+        photo_ids.append(store_photo(p))
+
+    reply = await brain.chat(f"[Sana bir fotoğraf gönderdim. Gözlerin şunu görüyor: {seen}]\n{caption}",
+                             camera.photo, send_photo)
     return {"reply": reply, "photos": [f"/api/photos/{p}" for p in photo_ids]}
 
 
