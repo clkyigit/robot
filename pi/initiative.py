@@ -104,10 +104,8 @@ class Initiative:
         if not msg:
             return None
         self.count += 1
-        if photo is not None and self._tell:
-            await self._tell(photo=photo)
         if self._tell:
-            await self._tell(msg)
+            await self._tell(msg, photo=photo, kind="oto")
         return msg
 
     # ------------------------------------------------------------ zamanla gelen olaylar
@@ -193,7 +191,7 @@ class Initiative:
             return
         self.last_seen_someone = time.time()
         await self.fire("biri geldi", f"{still_min} dakikadır önünde hiçbir şey kıpırdamıyordu, şimdi hareket oldu. "
-                                      f"Kameranla baktın (fotoğraf çekildi) ve şunu gördün: {seen}")
+                                      f"Kameranla baktın (fotoğraf çekildi) ve şunu gördün: {seen}", photo=img)
 
 
 initiative = Initiative()

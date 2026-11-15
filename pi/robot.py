@@ -44,6 +44,16 @@ EARS_VERIFY = os.environ.get("EARS_VERIFY", "1").strip() != "0"   # yazıda da k
 _wake_msg = None   # silinebilsin diye son "Dinliyorum" mesajı
 # Sesli konuşmaların son kayıtları (uygulama /api/ears ile görür)
 VOICE_LOG: list = []
+# Uygulamanın göreceği olay akışı: robotun kendiliğinden yazdıkları, sesli konuşmalar, uyarılar, günlükler
+EVENTS: list = []
+BOOT_ID = uuid.uuid4().hex[:8]   # robot yeniden başlayınca uygulama sayacı sıfırlasın diye
+
+
+def record_event(kind: str, text: str, heard: str = "", photo_ids: list | None = None) -> None:
+    eid = (EVENTS[-1]["id"] + 1) if EVENTS else 1
+    EVENTS.append({"id": eid, "at": time.time(), "kind": kind, "text": text, "heard": heard,
+                   "photos": [f"/api/photos/{p}" for p in (photo_ids or [])]})
+    del EVENTS[:-100]
 
 # Uygulamaya gönderilen son fotoğraflar (bellekte, en fazla 20)
 PHOTOS: "OrderedDict[str, bytes]" = OrderedDict()
@@ -289,8 +299,10 @@ def oto_line() -> str:
             f"hareket algılama {eye}{extra})")
 
 
-async def tell_owner(text: str = "", photo: bytes | None = None):
-    """Sahibine Telegram'dan yazar; son gönderilen mesajı döner."""
+async def tell_owner(text: str = "", photo: bytes | None = None, kind: str = "robot", record: bool = True):
+    """Sahibine Telegram'dan yazar ve uygulamanın olay akışına ekler; son Telegram mesajını döner."""
+    if record and (text or photo is not None):
+        record_event(kind, text, photo_ids=[store_photo(photo)] if photo is not None else [])
     oid = owner_id()
     if not TG or oid is None:
         return None
@@ -308,7 +320,7 @@ async def tell_owner(text: str = "", photo: bytes | None = None):
 async def on_wake() -> None:
     global _wake_msg
     if EARS_NOTIFY_WAKE:
-        _wake_msg = await tell_owner("👂 Dinliyorum...")
+        _wake_msg = await tell_owner("👂 Dinliyorum...", record=False)
 
 
 async def _drop_wake_msg() -> None:
@@ -324,7 +336,7 @@ async def on_heard(wav: bytes) -> None:
     try:
         raw = await brain.transcribe(wav)
     except Exception as e:  # noqa: BLE001
-        await tell_owner(f"🎤 Seni duydum ama sesi yazıya çeviremedim: {e}")
+        await tell_owner(f"🎤 Seni duydum ama sesi yazıya çeviremedim: {e}", kind="uyari")
         return
     if EARS_VERIFY and raw and not has_wake(raw):
         log.info("Yanlış alarm sayıldı (kelime yazıda yok): %s", raw[:80])
@@ -332,7 +344,7 @@ async def on_heard(wav: bytes) -> None:
         return
     text = strip_wake(raw)
     if not text:
-        await tell_owner("🎤 Efendim? Seslendin ama devamını anlayamadım.")
+        await tell_owner("🎤 Efendim? Seslendin ama devamını anlayamadım.", kind="uyari")
         return
     ears.heard(text)
     log.info("Sesli: %s", text)
@@ -340,13 +352,14 @@ async def on_heard(wav: bytes) -> None:
 
     async def send_photo(img: bytes) -> None:
         photo_ids.append(store_photo(img))
-        await tell_owner(photo=img)
+        await tell_owner(photo=img, record=False)
 
     reply = await brain.chat(text, camera.photo, send_photo, "ses")
+    record_event("ses", reply, heard=text, photo_ids=photo_ids)
     VOICE_LOG.append({"at": time.time(), "heard": text, "reply": reply,
                       "photos": [f"/api/photos/{p}" for p in photo_ids]})
     del VOICE_LOG[:-20]
-    await tell_owner(f"🎤 {text}\n\n🤖 {reply}")
+    await tell_owner(f"🎤 {text}\n\n🤖 {reply}", record=False)
 
 
 # ================================================================ arka plan: günlük ve beden takibi
@@ -368,7 +381,7 @@ async def diary_loop() -> None:
             try:
                 text = await brain.write_diary(today)
                 if text and DIARY_SHARE:
-                    await tell_owner(f"📔 Bugünkü günlüğüm:\n\n{text}")
+                    await tell_owner(f"📔 Bugünkü günlüğüm:\n\n{text}", kind="gunluk")
             except Exception as e:  # noqa: BLE001
                 log.warning("Günlük yazılamadı: %s", e)
         await asyncio.sleep(300)
@@ -382,7 +395,7 @@ async def body_watch() -> None:
         if t is not None and t >= TEMP_ALERT and time.time() - last_alert > 3600:
             last_alert = time.time()
             await tell_owner(f"🥵 Çok ısındım: {t:.0f} °C. Fanım çalışmıyor; beni serin bir yere koyabilir "
-                             "ya da biraz dinlendirebilir misin?")
+                             "ya da biraz dinlendirebilir misin?", kind="uyari")
         await asyncio.sleep(60)
 
 
@@ -450,6 +463,11 @@ class ChatPhotoIn(BaseModel):
 
 class LookIn(BaseModel):
     question: str = "Ne görüyorsun?"
+
+
+class InitiativeIn(BaseModel):
+    enabled: bool | None = None
+    presence: bool | None = None
 
 
 class PrivacyIn(BaseModel):
@@ -581,6 +599,41 @@ async def privacy(body: PrivacyIn):
     if body.mic is not None:
         ears.set_enabled(body.mic)
     return {"camera": camera.enabled, "mic": ears.enabled}
+
+
+@api.get("/api/events", dependencies=auth)
+async def events(since: int = 0, boot: str = ""):
+    """Robotun kendiliğinden yazdıkları, sesli konuşmalar, uyarılar ve günlükler (since'ten sonrakiler).
+    boot farklıysa robot yeniden başlamıştır; uygulama sayacını sıfırlamalı."""
+    if boot and boot != BOOT_ID:
+        since = 0
+    return {"boot": BOOT_ID, "events": [e for e in EVENTS if e["id"] > since][-50:],
+            "last": EVENTS[-1]["id"] if EVENTS else 0}
+
+
+@api.post("/api/initiative", dependencies=auth)
+async def set_initiative(body: InitiativeIn):
+    if body.enabled is not None:
+        initiative.enabled = body.enabled
+    if body.presence is not None:
+        initiative.presence_on = body.presence
+    return initiative.status()
+
+
+@api.post("/api/diary/write", dependencies=auth)
+async def diary_write():
+    text = await brain.write_diary()
+    if not text:
+        raise HTTPException(503, "Günlük yazılamadı, birazdan tekrar dene")
+    return {"day": brain._day(), "text": text}
+
+
+@api.get("/api/diary", dependencies=auth)
+async def diary(day: str = ""):
+    if day:
+        return {"day": day, "text": brain.diary_text(day) or ""}
+    d = brain.recent_diaries(1)
+    return {"day": d[-1][0], "text": d[-1][1]} if d else {"day": "", "text": ""}
 
 
 @api.get("/api/self", dependencies=auth)

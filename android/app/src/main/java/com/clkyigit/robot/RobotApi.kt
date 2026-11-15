@@ -87,11 +87,59 @@ class RobotApi(baseUrl: String, private val token: String) {
     suspend fun status(): Status {
         val s = getJson("/api/status")
         val cam = s.getJSONObject("camera")
+        val ears = s.optJSONObject("ears")
+        val oto = s.optJSONObject("initiative")
         return Status(
             models = parseModels(s.getJSONObject("models")),
             cpuTemp = if (s.isNull("cpu_temp")) null else s.getDouble("cpu_temp"),
             cameraEnabled = cam.optBoolean("enabled", true),
+            earsEnabled = ears?.optBoolean("enabled"),
+            earsRunning = ears?.optBoolean("running") ?: false,
+            earsError = ears?.optString("error").orEmpty(),
+            wakeWord = ears?.optJSONArray("wake_words")?.optString(0).orEmpty(),
+            initiativeEnabled = oto?.optBoolean("enabled"),
+            presenceEnabled = oto?.optBoolean("presence"),
         )
+    }
+
+    /** Robotun kendiliğinden yazdıkları, sesli konuşmalar, uyarılar, günlükler. */
+    suspend fun events(since: Int, boot: String): Events {
+        val r = getJson("/api/events?since=$since&boot=$boot")
+        val arr = r.getJSONArray("events")
+        val list = (0 until arr.length()).map { i ->
+            val e = arr.getJSONObject(i)
+            val ph = e.optJSONArray("photos")
+            Event(
+                id = e.getInt("id"), kind = e.optString("kind"), text = e.optString("text"),
+                heard = e.optString("heard"),
+                photoPaths = if (ph == null) emptyList() else (0 until ph.length()).map { ph.getString(it) },
+            )
+        }
+        return Events(r.getString("boot"), list, r.optInt("last"))
+    }
+
+    suspend fun selfInfo(): SelfInfo {
+        val r = getJson("/api/self")
+        val d = r.optJSONObject("diary")
+        return SelfInfo(
+            state = r.optString("state"),
+            identity = r.optString("identity"),
+            diaryDay = d?.optString("day").orEmpty(),
+            diary = d?.optString("text").orEmpty(),
+        )
+    }
+
+    suspend fun writeDiary(): String = postJson("/api/diary/write", JSONObject()).getString("text")
+
+    suspend fun setMic(enabled: Boolean) {
+        postJson("/api/privacy", JSONObject().put("mic", enabled))
+    }
+
+    suspend fun setInitiative(enabled: Boolean? = null, presence: Boolean? = null) {
+        val b = JSONObject()
+        enabled?.let { b.put("enabled", it) }
+        presence?.let { b.put("presence", it) }
+        postJson("/api/initiative", b)
     }
 
     /** Her modele kısa bir istek gönderip gerçekten çalışıp çalışmadığını ölçer. */
@@ -172,6 +220,13 @@ class RobotApi(baseUrl: String, private val token: String) {
         val name: String, val model: String, val active: Boolean,
         val ok: Boolean?, val error: String, val ms: Int?,
     )
-    data class Status(val models: List<ModelHealth>, val cpuTemp: Double?, val cameraEnabled: Boolean)
+    data class Status(
+        val models: List<ModelHealth>, val cpuTemp: Double?, val cameraEnabled: Boolean,
+        val earsEnabled: Boolean?, val earsRunning: Boolean, val earsError: String, val wakeWord: String,
+        val initiativeEnabled: Boolean?, val presenceEnabled: Boolean?,
+    )
+    data class Event(val id: Int, val kind: String, val text: String, val heard: String, val photoPaths: List<String>)
+    data class Events(val boot: String, val events: List<Event>, val last: Int)
+    data class SelfInfo(val state: String, val identity: String, val diaryDay: String, val diary: String)
     data class Reply(val text: String, val photos: List<Bitmap>)
 }

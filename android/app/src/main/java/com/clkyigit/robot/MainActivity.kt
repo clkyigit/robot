@@ -1,6 +1,9 @@
 package com.clkyigit.robot
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,6 +40,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +53,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
@@ -68,6 +74,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -78,8 +85,24 @@ private val BotBubble = Color(0xFF2A2D36)
 private val ErrorColor = Color(0xFFF09595)
 
 class MainActivity : ComponentActivity() {
+    override fun onResume() {
+        super.onResume()
+        Notifier.inForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Notifier.inForeground = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Robot kendiliğinden yazınca bildirim gelebilsin (Android 13+ izin ister)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -100,7 +123,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RobotApp(vm: RobotViewModel = viewModel()) {
-    var tab by rememberSaveable { mutableStateOf(if (vm.configured) 0 else 2) }
+    var tab by rememberSaveable { mutableStateOf(if (vm.configured) 0 else 3) }
 
     Scaffold(
         topBar = {
@@ -132,6 +155,8 @@ fun RobotApp(vm: RobotViewModel = viewModel()) {
                 NavigationBarItem(selected = tab == 1, onClick = { tab = 1 },
                     icon = { Icon(Icons.Filled.Visibility, null) }, label = { Text("Göz") })
                 NavigationBarItem(selected = tab == 2, onClick = { tab = 2 },
+                    icon = { Icon(Icons.Filled.SmartToy, null) }, label = { Text("Robot") })
+                NavigationBarItem(selected = tab == 3, onClick = { tab = 3 },
                     icon = { Icon(Icons.Filled.Settings, null) }, label = { Text("Ayarlar") })
             }
         },
@@ -140,6 +165,7 @@ fun RobotApp(vm: RobotViewModel = viewModel()) {
             when (tab) {
                 0 -> ChatScreen(vm)
                 1 -> EyeScreen(vm)
+                2 -> SelfScreen(vm)
                 else -> SettingsScreen(vm, onSaved = { tab = 0 })
             }
         }
@@ -166,7 +192,8 @@ fun ChatScreen(vm: RobotViewModel) {
         ) {
             if (vm.messages.isEmpty() && !vm.thinking) {
                 item {
-                    Text("Robota bir şey yaz ya da fotoğraf gönder. Etrafına bakmasını da isteyebilirsin.",
+                    Text("Robota bir şey yaz ya da fotoğraf gönder. Etrafına bakmasını da isteyebilirsin. " +
+                        "Robotun kendiliğinden yazdıkları (💭) ve ona sesli söylediklerin (🎤) de burada görünür.",
                         color = Color.Gray, modifier = Modifier.padding(top = 24.dp))
                 }
             }
@@ -283,6 +310,78 @@ fun EyeScreen(vm: RobotViewModel) {
 
         // "Bak ve anlat" sonucu sohbete düşer; son cevabı burada da göster
         vm.messages.lastOrNull { !it.mine && it.photos.isNotEmpty() }?.let { Bubble(it) }
+    }
+}
+
+// ================================================================ Robot (beden, kimlik, günlük, anahtarlar)
+
+@Composable
+fun ToggleRow(title: String, note: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (note.isNotEmpty()) Text(note, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled,
+            colors = SwitchDefaults.colors(checkedTrackColor = Accent))
+    }
+}
+
+@Composable
+fun SelfScreen(vm: RobotViewModel) {
+    LaunchedEffect(vm.connected) { if (vm.connected) vm.loadSelf() }
+    val s = vm.status
+    val info = vm.selfInfo
+
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (!vm.connected) {
+            Text("Robota bağlı değil (Ayarlar).", color = Color.Gray)
+            return@Column
+        }
+
+        Text("Duyular ve davranış", style = MaterialTheme.typography.titleMedium)
+        val earsOn = s?.earsEnabled ?: false
+        ToggleRow(
+            "👂 Kulaklar",
+            when {
+                !earsOn -> "Kapalı"
+                s?.earsRunning == true -> "Dinliyor — \"${s?.wakeWord.orEmpty().ifEmpty { "robot" }}\" de"
+                else -> "Çalışmıyor: ${s?.earsError.orEmpty()}"
+            },
+            earsOn,
+        ) { vm.setMic(it) }
+        val camOn = s?.cameraEnabled ?: true
+        ToggleRow("👁 Kamera", if (camOn) "Açık" else "Kapalı (gizlilik)", camOn) { vm.toggleCamera() }
+        val otoOn = s?.initiativeEnabled ?: false
+        ToggleRow("💭 Kendiliğinden davranma",
+            "Sabah selamı, uzun sessizlikte halini sorma, biri gelince fark etme", otoOn) { vm.setInitiative(it) }
+        ToggleRow("🚶 Hareket algılama", "Kamera dakikada bir bakar (Pi'de, internetsiz)",
+            s?.presenceEnabled ?: false, enabled = otoOn && camOn) { vm.setPresence(it) }
+
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Bedeni", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = { vm.loadSelf() }, enabled = !vm.loadingSelf) {
+                Text(if (vm.loadingSelf) "…" else "Yenile")
+            }
+        }
+        Text(info?.state?.ifEmpty { "—" } ?: "Yükleniyor…", style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace, color = Color(0xFFCFD3DA))
+
+        Text("Kimliği (kendini nasıl tanıyor)", style = MaterialTheme.typography.titleMedium)
+        Text(info?.identity?.ifBlank { null } ?: "Henüz boş. İlk günlüğünü yazınca dolmaya başlar.",
+            style = MaterialTheme.typography.bodyMedium)
+
+        Text("Son günlüğü" + (info?.diaryDay?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+            style = MaterialTheme.typography.titleMedium)
+        Text(info?.diary?.ifBlank { null } ?: "Henüz günlük yazmadı. Her gece 23:30'da yazar.",
+            style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(onClick = { vm.writeDiary() }, enabled = !vm.writingDiary, modifier = Modifier.fillMaxWidth()) {
+            Text(if (vm.writingDiary) "Yazıyor…" else "📔 Bugünkü günlüğünü şimdi yazsın")
+        }
+
+        vm.error?.let { Text(it, color = ErrorColor, style = MaterialTheme.typography.bodySmall) }
     }
 }
 

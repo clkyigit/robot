@@ -109,6 +109,10 @@ Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gere
 | DELETE | `/api/history` | Sohbet geçmişini temizler |
 | POST | `/api/privacy` | `{"camera": false}` → kamerayı, `{"mic": false}` → kulakları kapatır |
 | GET | `/api/ears` | Kulakların durumu ve son sesli konuşmalar |
+| GET | `/api/events?since=&boot=` | Olay akışı: kendiliğinden mesajlar, sesli konuşmalar, uyarılar, günlükler |
+| GET | `/api/self` | Beden durumu, kimlik, son günlük |
+| GET | `/api/diary?day=` · POST `/api/diary/write` | Günlüğü oku / şimdi yazdır |
+| POST | `/api/initiative` | `{"enabled": bool, "presence": bool}` |
 
 ## Gizlilik
 
@@ -123,6 +127,10 @@ Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gere
 [son sürüm sayfasına](https://github.com/clkyigit/robot/releases/tag/son-surum) koyar.
 Telefondan oradan `robot.apk`'yı indirip kur. Uygulamada **Ayarlar** sekmesine robotun
 adresini (`http://PI_IP:8080`) ve `API_TOKEN` anahtarını gir.
+
+Uygulama (0.4+): **Robot** sekmesinde bedeni, kimliği, son günlüğü ve anahtarlar (kulaklar, kamera,
+kendiliğinden davranma, hareket algılama). Robotun kendiliğinden yazdıkları (💭) ve sesli konuşmalar (🎤)
+sohbete düşer; uygulama arka plandayken bildirim gelir (`GET /api/events`).
 
 API anahtarları (Claude, Gemini, OpenAI) uygulamada **yoktur**; hepsi Pi'de kalır.
 Uygulama sadece Pi'deki sunucuyla konuşur.

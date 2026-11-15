@@ -61,13 +61,104 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         return cachedApi!!
     }
 
+    var selfInfo by mutableStateOf<RobotApi.SelfInfo?>(null)
+        private set
+    var loadingSelf by mutableStateOf(false)
+        private set
+    var writingDiary by mutableStateOf(false)
+        private set
+
     init {
+        Notifier.setup(app)
         viewModelScope.launch {
             while (true) {
                 if (configured) refreshStatus()
                 delay(15_000)
             }
         }
+        // Robotun kendiliğinden yazdıklarını ve sesli konuşmaları sohbete getir
+        viewModelScope.launch {
+            while (true) {
+                if (configured) pollEvents()
+                delay(5_000)
+            }
+        }
+    }
+
+    private var firstPoll = true
+
+    private suspend fun pollEvents() {
+        val since = prefs.getInt("event_id", 0)
+        val boot = prefs.getString("event_boot", "").orEmpty()
+        val r = try {
+            api().events(since, boot)
+        } catch (e: Exception) {
+            return
+        }
+        // İlk açılışta eski olayları sel gibi doldurma: son birkaç tanesi yeter
+        val fresh = if (firstPoll && boot.isEmpty()) r.events.takeLast(5) else r.events
+        firstPoll = false
+        for (e in fresh) {
+            val photos = e.photoPaths.mapNotNull { runCatching { api().bitmap(it) }.getOrNull() }
+            when (e.kind) {
+                "ses" -> {
+                    messages.add(Msg(true, "🎤 ${e.heard}"))
+                    messages.add(Msg(false, e.text, photos))
+                    Notifier.show(getApplication<Application>(), "🎤 ${e.heard}", e.text)
+                }
+                "oto" -> {
+                    messages.add(Msg(false, "💭 ${e.text}", photos))
+                    Notifier.show(getApplication<Application>(), "Robot sana yazdı", e.text)
+                }
+                else -> {
+                    messages.add(Msg(false, e.text, photos))
+                    Notifier.show(getApplication<Application>(), "Robot", e.text)
+                }
+            }
+        }
+        val last = r.events.lastOrNull()?.id ?: if (r.boot != boot) 0 else since
+        prefs.edit().putInt("event_id", last).putString("event_boot", r.boot).apply()
+    }
+
+    fun loadSelf() {
+        if (loadingSelf) return
+        loadingSelf = true
+        viewModelScope.launch {
+            try {
+                selfInfo = api().selfInfo()
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                loadingSelf = false
+            }
+        }
+    }
+
+    fun writeDiary() {
+        if (writingDiary) return
+        writingDiary = true
+        viewModelScope.launch {
+            try {
+                api().writeDiary()
+                selfInfo = api().selfInfo()
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                writingDiary = false
+            }
+        }
+    }
+
+    fun setMic(on: Boolean) = viewModelScope.launch {
+        try { api().setMic(on); refreshStatus() } catch (e: Exception) { error = e.message }
+    }
+
+    fun setInitiative(on: Boolean) = viewModelScope.launch {
+        try { api().setInitiative(enabled = on); refreshStatus() } catch (e: Exception) { error = e.message }
+    }
+
+    fun setPresence(on: Boolean) = viewModelScope.launch {
+        try { api().setInitiative(presence = on); refreshStatus() } catch (e: Exception) { error = e.message }
     }
 
     /** Ayarları doğrular ve kaydeder. Hata varsa mesajını döner. */
