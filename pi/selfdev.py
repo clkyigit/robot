@@ -174,6 +174,7 @@ camera.py, face_draw.py (yüz çizimi), govde.md (parçaların).
 Çalışma kuralları:
 - Bir kopyada çalışıyorsun; değişikliğin ancak kontrol_et geçerse uygulanır. Bitirmeden önce mutlaka kontrol_et çağır.
 - Küçük, odaklı ve dikkatli değişiklik yap. Önce ilgili dosyaları oku, sonra değiştir. Var olan özellikleri bozma.
+- Var olan büyük dosyaları dosya_yaz ile baştan yazma; degistir ile parça parça değiştir (cevap uzunluğun sınırlı).
 - Yeni bir özellik eklediysen mümkünse testler/test_<ad>.py içine küçük bir test yaz (standart kütüphane, assert;
   ağ, kamera, mikrofon gerektirmesin).
 - Yeni Python paketi kuramazsın; sadece kurulu olanları kullan (fastapi, python-telegram-bot, anthropic,
@@ -406,16 +407,22 @@ class SelfDev:
         checked_ok = False
         for _ in range(MAX_TURNS):
             resp = await asyncio.wait_for(brain.claude.messages.create(
-                model=brain.CLAUDE_MODEL, max_tokens=8000, system=AGENT_SYSTEM,
-                tools=AGENT_TOOLS, messages=messages), timeout=300)
+                model=brain.CLAUDE_MODEL, max_tokens=16000, system=AGENT_SYSTEM,
+                tools=AGENT_TOOLS, messages=messages), timeout=600)
             messages.append({"role": "assistant", "content": resp.content})
-            if resp.stop_reason != "tool_use":
+            uses = [b for b in resp.content if b.type == "tool_use"]
+            if not uses:
                 messages.append({"role": "user", "content": "Bir araç kullanarak devam et (bitir ya da vazgec)."})
                 continue
+            if resp.stop_reason == "max_tokens":
+                # Cevap yarıda kesildi: araç çağrıları eksik olabilir, hiçbirini çalıştırma ama hepsine cevap ver
+                messages.append({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": b.id, "is_error": True,
+                     "content": "Cevabın uzunluk sınırında kesildi, bu araç çalıştırılmadı. Büyük dosyayı baştan "
+                                "yazma; degistir ile küçük parçalar halinde değiştir."} for b in uses]})
+                continue
             results = []
-            for b in resp.content:
-                if b.type != "tool_use":
-                    continue
+            for b in uses:
                 args = b.input or {}
                 if b.name == "bitir":
                     if not checked_ok:
