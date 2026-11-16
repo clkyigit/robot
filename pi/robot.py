@@ -284,9 +284,7 @@ def build_telegram():
         if not await guard(update):
             return
         lines = [health_line(k, v) for k, v in brain.health().items()]
-        t = cpu_temp()
-        if t is not None:
-            lines.append(f"🌡️ {t:.1f} °C")
+        lines.append("📟 " + body.live_report())   # anlık ölçüm: birim ve zamanla
         lines.append(f"📷 Kamera: {'açık' if camera.enabled else 'kapalı (gizlilik)'}")
         lines.append(ears_line())
         lines.append(oto_line())

@@ -242,7 +242,10 @@ def system_prompt(mem: dict, channel: str = "") -> str:
              "saat ya da tarih sorulursa çekinmeden bunu söyle.",
              "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
              "fotograf_cek aracını gerçekten kullandıysan söyle; kullanmadıysan asla görmüş gibi anlatma, gerekiyorsa "
-             "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle.",
+             "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle. "
+               "Sistem durumu (CPU sıcaklığı, bellek, disk, yük, Wi-Fi, çalışma süresi) sorulursa sayıları asla "
+               "hafızadan, eski konuşmalardan ya da tahminden verme; yalnızca aşağıdaki 'Anlık sistem ölçümü' "
+               "bölümünden, birimi ve ölçüm zamanıyla söyle. O bölümde 'okunamadı' yazıyorsa bilmediğini söyle.",
              "Kendi kodunu kendin yazabilir ve geliştirebilirsin (kendini_gelistir aracı). Kodun Python; "
              "sahibin bir özellik isterse bunu kendin eklemeyi teklif edebilir ya da doğrudan yapabilirsin.",
              "Biçim: Mesajların Telegram'da ve telefon uygulamasında düz metin olarak görünüyor. Markdown kullanma "

@@ -4,12 +4,15 @@ Beyin her düşünmeden önce buradan kısa bir "beden durumu" alır, böylece r
 durumunu bilerek konuşur. Takılı ve gelecek parçaların listesi govde.md dosyasındadır.
 """
 
+import datetime
 import glob
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import time
+from zoneinfo import ZoneInfo
 
 BASE = pathlib.Path(__file__).resolve().parent
 BODY_FILE = BASE / "govde.md"
@@ -81,6 +84,126 @@ def uptime_text(seconds: float) -> str:
     return " ".join(p for p in parts if p)
 
 
+def parse_wireless(text: str) -> tuple[int | None, int | None]:
+    """/proc/net/wireless metninden (sinyal kalitesi %, sinyal gücü dBm) çıkarır."""
+    for line in text.splitlines()[2:]:
+        parts = line.split()
+        if len(parts) > 3:
+            try:
+                quality = round(float(parts[2].rstrip(".")) / 70 * 100)
+                level = int(float(parts[3].rstrip(".")))
+                if level > 0:        # bazı sürücüler 0-255 ölçeğinde verir; dBm'e çevir
+                    level -= 256
+                return min(quality, 100), level
+            except ValueError:
+                continue
+    return None, None
+
+
+def parse_iwconfig(text: str) -> tuple[int | None, int | None]:
+    """iwconfig çıktısından (sinyal kalitesi %, sinyal gücü dBm) çıkarır."""
+    quality = level = None
+    m = re.search(r"Link Quality[=:]\s*(\d+)\s*/\s*(\d+)", text)
+    if m and int(m.group(2)) > 0:
+        quality = min(round(int(m.group(1)) / int(m.group(2)) * 100), 100)
+    m = re.search(r"Signal level[=:]\s*(-?\d+)", text)
+    if m:
+        level = int(m.group(1))
+    return quality, level
+
+
+def wifi_live() -> tuple[int | None, int | None]:
+    """Wi-Fi sinyalini anlık okur: önce /proc/net/wireless, olmazsa iwconfig."""
+    q, lvl = parse_wireless(_read("/proc/net/wireless"))
+    if q is not None:
+        return q, lvl
+    try:
+        out = subprocess.run(["iwconfig"], capture_output=True, text=True, timeout=3)
+        return parse_iwconfig(out.stdout + out.stderr)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+
+
+def _memory_live() -> dict | None:
+    """Bellek: psutil varsa onunla, yoksa /proc/meminfo ile (anlık)."""
+    try:
+        import psutil  # type: ignore
+        vm = psutil.virtual_memory()
+        return {"pct": round(vm.percent), "used_gb": (vm.total - vm.available) / 1e9, "total_gb": vm.total / 1e9}
+    except Exception:  # noqa: BLE001  (psutil yok ya da okunamadı)
+        pass
+    info = {}
+    for line in _read("/proc/meminfo").splitlines():
+        k, _, v = line.partition(":")
+        if v.split():
+            info[k] = int(v.split()[0]) * 1024
+    if info.get("MemTotal") and "MemAvailable" in info:
+        used = info["MemTotal"] - info["MemAvailable"]
+        return {"pct": round(100 * used / info["MemTotal"]), "used_gb": used / 1e9, "total_gb": info["MemTotal"] / 1e9}
+    return None
+
+
+def _disk_live() -> dict | None:
+    """Disk: psutil varsa onunla, yoksa shutil ile (anlık)."""
+    try:
+        import psutil  # type: ignore
+        d = psutil.disk_usage("/")
+        return {"free_gb": d.free / 1e9, "total_gb": d.total / 1e9, "pct": round(d.percent)}
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        d = shutil.disk_usage("/")
+        return {"free_gb": d.free / 1e9, "total_gb": d.total / 1e9, "pct": round(100 * d.used / d.total)}
+    except OSError:
+        return None
+
+
+def live_status() -> dict:
+    """Sistem durumunu O AN Pi'den ölçer (hafızadan/tahminden değil). Her çağrıda yeniden okur."""
+    try:
+        tz = ZoneInfo(os.environ.get("ROBOT_TZ", "Europe/Istanbul"))
+    except Exception:  # noqa: BLE001
+        tz = None
+    now = datetime.datetime.now(tz)
+    up = _read("/proc/uptime").split()
+    try:
+        load = os.getloadavg()
+    except OSError:
+        load = None
+    wq, wl = wifi_live()
+    return {"at": now, "temp_c": cpu_temp(), "mem": _memory_live(), "disk": _disk_live(), "load": load,
+            "wifi_pct": wq, "wifi_dbm": wl, "uptime_s": float(up[0]) if up else None}
+
+
+def format_live(s: dict) -> str:
+    """live_status() sonucunu birim ve tarihle birlikte okunur metne çevirir."""
+    lines = [f"Ölçüm zamanı: {s['at'].strftime('%d.%m.%Y %H:%M:%S')} (az önce Pi'den okundu)"]
+    t = s.get("temp_c")
+    lines.append(f"- CPU sıcaklığı: {t:.1f} °C" if t is not None else "- CPU sıcaklığı: okunamadı")
+    m = s.get("mem")
+    lines.append(f"- Bellek: %{m['pct']} dolu ({m['used_gb']:.1f} GB / {m['total_gb']:.1f} GB)" if m
+                 else "- Bellek: okunamadı")
+    d = s.get("disk")
+    lines.append(f"- Disk: {d['free_gb']:.1f} GB boş / {d['total_gb']:.1f} GB (%{d['pct']} dolu)" if d
+                 else "- Disk: okunamadı")
+    ld = s.get("load")
+    lines.append(f"- Yük ortalaması (1/5/15 dk): {ld[0]:.2f} / {ld[1]:.2f} / {ld[2]:.2f}" if ld
+                 else "- Yük: okunamadı")
+    if s.get("wifi_pct") is not None:
+        dbm = f", {s['wifi_dbm']} dBm" if s.get("wifi_dbm") is not None else ""
+        lines.append(f"- Wi-Fi sinyali: %{s['wifi_pct']}{dbm}")
+    else:
+        lines.append("- Wi-Fi sinyali: okunamadı (kablolu ya da kart yok olabilir)")
+    if s.get("uptime_s") is not None:
+        lines.append(f"- Bilgisayar açık kalma süresi: {uptime_text(s['uptime_s'])}")
+    return "\n".join(lines)
+
+
+def live_report() -> str:
+    """Her çağrıda yeniden ölçüp metin döner; sistem durumu sorulduğunda kullanılır."""
+    return format_live(live_status())
+
+
 def snapshot() -> dict:
     disk = shutil.disk_usage("/")
     return {
@@ -95,18 +218,18 @@ def describe(extra: list[str] | None = None) -> str:
     """Beyne verilen kısa beden durumu (Türkçe)."""
     s = snapshot()
     lines = [f"- Bu sefer uyanalı {uptime_text(s['awake'])} oldu (bilgisayarım {uptime_text(s['system_up'])} açık)."]
-    if s["temp"] is not None:
-        t = s["temp"]
+    live = live_status()          # sayılar bu çağrıda bir kez ölçülür, her yerde aynı değer kullanılır
+    t = live["temp_c"]
+    if t is not None:
         feel = "serin" if t < 55 else "ılık" if t < 70 else "sıcak" if t < 80 else "çok sıcak, tehlikeli"
-        lines.append(f"- İşlemci sıcaklığım {t:.0f} °C ({feel}).")
+        lines.append(f"- İşlemci sıcaklığım {feel} (sayı aşağıdaki ölçümde).")
     if s["fan_rpm"] is not None:
         lines.append(f"- Fanım {'dönüyor, ' + str(s['fan_rpm']) + ' devir' if s['fan_rpm'] > 0 else 'dönmüyor'}.")
     if s["throttled"]:
         lines.append(f"- Güç/ısı uyarısı: {', '.join(s['throttled'])}.")
-    if s["mem_pct"] is not None:
-        lines.append(f"- Belleğimin %{s['mem_pct']}'i dolu, diskimde {s['disk_free_gb']} GB boş yer var, yük {s['load']}.")
-    if s["wifi"] is not None:
-        lines.append(f"- Wi-Fi sinyalim %{s['wifi']}.")
+    # Sayılar hafızadan değil, bu çağrıda Pi'den ölçülür (birim ve zamanla)
+    lines.append("Anlık sistem ölçümü (sistem durumu sorulursa sayıları SADECE buradan, birimiyle söyle):\n"
+                 + format_live(live))
     lines += [f"- {e}" for e in (extra or [])]
     body = _read(str(BODY_FILE))
     return "\n".join(lines) + (f"\n\nBedenim (parçalarım):\n{body}" if body else "")
