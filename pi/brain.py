@@ -264,7 +264,14 @@ def radyoloji_kurallari() -> str:
             "her zaman sahibinin ve ilgili hocalarının. Hasta adı, protokol numarası gibi kimlik bilgilerini "
             "isteme; sahibi paylaşırsa hafızana kaydetme (hasta gizliliği). Sahibin kendi sağlığı "
             "(ameliyatı, denge ve göz şikâyeti) hakkında kendiliğinden radyolojik yorum yapma; o konuyu "
-            "yalnızca o açarsa, nazikçe konuş.")
+            "yalnızca o açarsa, nazikçe konuş. "
+            "Makale araştırma: Sahibin bir görüntü bulgusu tarif edip ayırıcı tanı isterse (ya da bulgu "
+            "paylaşıp 'araştır' derse) önce kendi ayırıcı tanı listeni kısaca çıkar, sonra makale_ara aracıyla "
+            "PubMed'de İngilizce, kısa anahtar kelimeli sorgularla (bulgu + modalite + yer + 'differential "
+            "diagnosis') en fazla 1-2 arama yap. Sonuçları özetle; kaynağı yazar/dergi/yıl ve PMID ile "
+            "göster. Yalnızca araçtan dönen makaleleri kaynak göster, PMID ya da bulgu uydurma; yalnızca "
+            "özeti gördüğünü, tam metni okumadığını belirt; arama sonuç vermezse ya da başarısız olursa "
+            "bunu dürüstçe söyle. Sorguya hasta kimliği yazma.")
 
 
 def system_prompt(mem: dict, channel: str = "") -> str:
@@ -600,6 +607,15 @@ async def transcribe(wav: bytes, hint: str = "") -> str:
 # ---------------------------------------------------------------- araçlar
 
 TOOLS = [
+    {"name": "makale_ara",
+     "description": "PubMed'de tıbbi/radyolojik makale arar. Sahibin verdiği görüntü bulgusu için ayırıcı tanı "
+                    "konuşurken ya da bir tanının görüntüleme özelliklerini doğrulamak için kullan. Sorguyu "
+                    "İngilizce, kısa ve anahtar kelimelerle yaz (örn. 'ependymoma differential diagnosis MRI "
+                    "fourth ventricle'). Hasta adı/kimlik bilgisi asla sorguya yazma.",
+     "input_schema": {"type": "object",
+                      "properties": {"sorgu": {"type": "string", "description": "İngilizce PubMed arama sorgusu"},
+                                     "adet": {"type": "integer", "description": "Kaç makale (1-6, varsayılan 5)"}},
+                      "required": ["sorgu"]}},
     {
         "name": "fotograf_cek",
         "description": "Kamerayla etrafına bakar. Fotoğraf sahibine de gönderilir. "
@@ -659,6 +675,9 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
         if not SELF_IMPROVE:
             return "Kendimi geliştirme özelliğim şu an kullanılamıyor."
         return SELF_IMPROVE(args.get("hedef", ""), args.get("neden", ""))
+    if name == "makale_ara":
+        import makale
+        return await makale.makale_ara(str(args.get("sorgu", "")), args.get("adet", 5) or 5)
     if name == "gecmise_bak":
         return search_past(args.get("sorgu", ""), args.get("tarih", ""))
     return f"Bilinmeyen araç: {name}"
