@@ -45,6 +45,7 @@ Wants=network-online.target
 User=$USER
 WorkingDirectory=$DIR
 EnvironmentFile=$DIR/.env
+ExecStartPre=-$DIR/venv/bin/python $DIR/selfdev_guard.py
 ExecStart=$DIR/venv/bin/python robot.py
 Restart=always
 RestartSec=10

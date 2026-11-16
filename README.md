@@ -93,6 +93,20 @@ Robot arada bir kendi kendine düşünür ve sahibine yazmak isteyip istemediği
 Varsayılan olarak sessiz saat ve günlük sınır yoktur; istenirse `QUIET_HOURS=23-8`, `MAX_INITIATIVES=5`.
 Telegram: `/oto`, `/oto ac`, `/oto kapat`, `/oto kamera`. Kapalı başlatmak için `INITIATIVE=0`, hareket algılamasız `PRESENCE=0`.
 
+## Kendini geliştirme (tam serbest)
+
+Robot kendi Python kodunu değiştirebilir: sohbette `kendini_gelistir` aracıyla (sahibi bir özellik isteyince ya da
+kendisi faydalı görünce) ve her gece günlükten sonra kendini gözden geçirerek. Onay beklemez, ama:
+- Kodun **kopyasında** çalışır; derleme + robotun yüklenebilmesi + `pi/testler/test_*.py` testleri geçmezse uygulanmaz.
+- `.env`, hafıza, sahip, günlük dosyalarını okuyamaz; değişiklikte anahtar/sır varsa uygulanmaz.
+- `selfdev.py`, `selfdev_guard.py`, kurulum betikleri ve `requirements.txt` koruma altındadır.
+- Uyguladıktan sonra yeniden başlar; 90 sn sağlıklı çalışırsa onaylanır (ve `GITHUB_PUSH_TOKEN` varsa GitHub'a gönderilir).
+  Açılamazsa `selfdev_guard.py` (systemd ExecStartPre) 3 denemeden sonra önceki sürüme döner.
+- Her adımı Telegram'a ve uygulamaya yazar. Telegram: `/gelisim`, `/gelistir <hedef>`, `/geri_al`, `/gelisim kapat`.
+- Ayarlar: `SELFDEV=0` (kapalı), `SELFDEV_MAX_PER_DAY` (5; 0 = sınırsız).
+
+Kurulum (bir kez): `bash pi/gelisim_kurulum.sh`. Robot GitHub'a gönderiyorsa, bilgisayarda çalışmadan önce `git pull`.
+
 ## Uygulama API'si
 
 Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.
@@ -112,6 +126,7 @@ Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gere
 | GET | `/api/events?since=&boot=` | Olay akışı: kendiliğinden mesajlar, sesli konuşmalar, uyarılar, günlükler |
 | GET | `/api/self` | Beden durumu, kimlik, son günlük |
 | GET | `/api/diary?day=` · POST `/api/diary/write` | Günlüğü oku / şimdi yazdır |
+| GET | `/api/selfdev` · POST `/api/selfdev` `{"goal"}` · POST `/api/selfdev/undo` | Kendini geliştirme |
 | POST | `/api/initiative` | `{"enabled": bool, "presence": bool}` |
 
 ## Gizlilik

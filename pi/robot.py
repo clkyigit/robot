@@ -6,6 +6,7 @@ Ayarlar .env dosyasından okunur (bkz. README).
 
 import asyncio
 import contextlib
+import datetime
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from camera import camera  # noqa: E402
 from ears import WAKE_WORDS, ears, has_wake, strip_wake  # noqa: E402
 import body  # noqa: E402
 from initiative import initiative  # noqa: E402
+from selfdev import selfdev  # noqa: E402
 
 BASE = pathlib.Path(__file__).resolve().parent
 WEB_DIR = BASE / "web"
@@ -93,6 +95,7 @@ def self_state() -> str:
 
 
 brain.STATE_PROVIDER = self_state
+brain.SELF_IMPROVE = lambda goal, reason="": selfdev.request(goal, reason)
 
 
 def owner_id():
@@ -151,7 +154,8 @@ def build_telegram():
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             await update.message.reply_text("Buradayım. Bana yazabilir, fotoğraf gönderebilirsin. "
-                                            "Komutlar: /foto /hafiza /gunluk /kimlik /sifirla /durum /test /dinle /sus /oto")
+                                            "Komutlar: /foto /hafiza /gunluk /kimlik /sifirla /durum /test /dinle /sus /oto "
+                                            "/gelisim /gelistir /geri_al")
 
     async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
@@ -241,6 +245,36 @@ def build_telegram():
         await update.message.reply_text(
             oto_line() + "\n\n/oto ac · /oto kapat · /oto kamera (hareket algılamayı aç/kapat)")
 
+    async def cmd_gelisim(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        arg = (context.args[0].lower() if context.args else "")
+        if arg in ("ac", "aç"):
+            selfdev.enabled = True
+        elif arg == "kapat":
+            selfdev.enabled = False
+        names = {"uygulandi": "✅ uyguladım", "vazgecti": "🤷 vazgeçtim", "test_gecmedi": "❌ test geçmedi",
+                 "geri_alindi": "↩️ açılamadı, geri döndüm", "sahibim_geri_aldi": "↩️ sen geri aldın",
+                 "onaylandi": "👍 sorunsuz çalıştı", "sir_engellendi": "🛑 sır engellendi"}
+        hist = "\n".join(
+            f"{datetime.datetime.fromtimestamp(h['at'], brain.TZ):%d.%m %H:%M} {names.get(h.get('kind'), h.get('kind'))}: "
+            f"{h.get('summary') or h.get('goal') or h.get('subject', '')}" for h in selfdev.history(8)) or "Henüz yok."
+        await reply_long(update, selfdev_line() + "\n\nSon geliştirmelerim:\n" + hist +
+                         "\n\n/gelistir <ne istediğin> · /geri_al · /gelisim kapat|ac")
+
+    async def cmd_gelistir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await guard(update):
+            return
+        goal = " ".join(context.args).strip()
+        if not goal:
+            await update.message.reply_text("Ne geliştireyim? Örnek: /gelistir hava durumunu söyleyebileyim")
+            return
+        await update.message.reply_text(selfdev.request(goal, "Sahibim istedi"))
+
+    async def cmd_geri_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if await guard(update):
+            await update.message.reply_text(await selfdev.undo_last())
+
     async def cmd_sus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             ears.set_enabled(False)
@@ -256,6 +290,7 @@ def build_telegram():
         lines.append(f"📷 Kamera: {'açık' if camera.enabled else 'kapalı (gizlilik)'}")
         lines.append(ears_line())
         lines.append(oto_line())
+        lines.append(selfdev_line())
         await update.message.reply_text("\n".join(lines))
 
     app = (Application.builder().token(TELEGRAM_TOKEN)
@@ -268,6 +303,9 @@ def build_telegram():
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("dinle", cmd_dinle))
     app.add_handler(CommandHandler("oto", cmd_oto))
+    app.add_handler(CommandHandler("gelisim", cmd_gelisim))
+    app.add_handler(CommandHandler("gelistir", cmd_gelistir))
+    app.add_handler(CommandHandler("geri_al", cmd_geri_al))
     app.add_handler(CommandHandler("gunluk", cmd_gunluk))
     app.add_handler(CommandHandler("kimlik", cmd_kimlik))
     app.add_handler(CommandHandler("sus", cmd_sus))
@@ -286,6 +324,17 @@ def ears_line() -> str:
     if st["running"]:
         return f"👂 Kulak: dinliyor (\"{st['wake_words'][0]}\" de)"
     return f"👂 Kulak: çalışmıyor ({st['error'] or 'başlıyor'})"
+
+
+def selfdev_line() -> str:
+    st = selfdev.status()
+    if not st["enabled"]:
+        return "🛠️ Kendini geliştirme: kapalı (/gelisim ac)"
+    if st["busy"]:
+        return f"🛠️ Kendini geliştirme: şu an çalışıyor ({st['current'][:60]})"
+    limit = f"/{st['max_per_day']}" if st["max_per_day"] > 0 else ""
+    gh = "GitHub'a gönderiyor" if st["push"] else "sadece Pi'de (GitHub anahtarı yok)"
+    return f"🛠️ Kendini geliştirme: açık, tam serbest (bugün {st['today']}{limit}, {gh})"
 
 
 def oto_line() -> str:
@@ -382,6 +431,8 @@ async def diary_loop() -> None:
                 text = await brain.write_diary(today)
                 if text and DIARY_SHARE:
                     await tell_owner(f"📔 Bugünkü günlüğüm:\n\n{text}", kind="gunluk")
+                if text:
+                    await selfdev.reflect()   # günlükten sonra: kendimde geliştirmek istediğim bir şey var mı?
             except Exception as e:  # noqa: BLE001
                 log.warning("Günlük yazılamadı: %s", e)
         await asyncio.sleep(300)
@@ -418,6 +469,7 @@ async def lifespan(_app: FastAPI):
         store_photo(img)
 
     bg += initiative.start(tell_owner, camera, keep_photo)
+    bg += selfdev.start(tell_owner)
     st = brain.model_status()
     log.info("Robot başladı. Claude=%s Gemini=%s OpenAI=%s Telegram=%s API=%s port=%d",
              st["claude"]["active"], st["gemini"]["active"], st["openai"]["active"],
@@ -465,6 +517,10 @@ class LookIn(BaseModel):
     question: str = "Ne görüyorsun?"
 
 
+class SelfDevIn(BaseModel):
+    goal: str
+
+
 class InitiativeIn(BaseModel):
     enabled: bool | None = None
     presence: bool | None = None
@@ -489,6 +545,7 @@ async def status():
         "camera": {"enabled": camera.enabled, "active": camera.active},
         "ears": ears.status(),
         "initiative": initiative.status(),
+        "selfdev": selfdev.status(),
     }
 
 
@@ -618,6 +675,23 @@ async def set_initiative(body: InitiativeIn):
     if body.presence is not None:
         initiative.presence_on = body.presence
     return initiative.status()
+
+
+@api.get("/api/selfdev", dependencies=auth)
+async def selfdev_info():
+    return {**selfdev.status(), "history": selfdev.history(20)}
+
+
+@api.post("/api/selfdev", dependencies=auth)
+async def selfdev_request(body: SelfDevIn):
+    if not body.goal.strip():
+        raise HTTPException(400, "Hedef boş")
+    return {"message": selfdev.request(body.goal.strip(), "Sahibim uygulamadan istedi")}
+
+
+@api.post("/api/selfdev/undo", dependencies=auth)
+async def selfdev_undo():
+    return {"message": await selfdev.undo_last()}
 
 
 @api.post("/api/diary/write", dependencies=auth)

@@ -68,6 +68,8 @@ if OPENAI_KEY:
 
 # Robotun anlık beden/durum bilgisini veren fonksiyon (robot.py ayarlar)
 STATE_PROVIDER: Optional[Callable[[], str]] = None
+# Kendi kodunu geliştirme isteğini başlatan fonksiyon (robot.py ayarlar: selfdev.request)
+SELF_IMPROVE: Optional[Callable[[str, str], str]] = None
 
 CHANNELS = {
     "telegram": "Telegram'dan yazdı.",
@@ -241,6 +243,8 @@ def system_prompt(mem: dict, channel: str = "") -> str:
              "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
              "fotograf_cek aracını gerçekten kullandıysan söyle; kullanmadıysan asla görmüş gibi anlatma, gerekiyorsa "
              "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle.",
+             "Kendi kodunu kendin yazabilir ve geliştirebilirsin (kendini_gelistir aracı). Kodun Python; "
+             "sahibin bir özellik isterse bunu kendin eklemeyi teklif edebilir ya da doğrudan yapabilirsin.",
              "Biçim: Mesajların Telegram'da ve telefon uygulamasında düz metin olarak görünüyor. Markdown kullanma "
              "(yıldız, kalın yazı, # başlık yok); gerekirse basit tire ile liste yapabilirsin. Emoji kullanabilirsin."]
 
@@ -559,6 +563,17 @@ TOOLS = [
             "required": ["bilgi"]},
     },
     {
+        "name": "kendini_gelistir",
+        "description": "Kendi kodunu değiştirerek kendine yeni bir yetenek ekler ya da bir sorununu düzeltir. "
+                       "Arka planda çalışır (birkaç dakika), test eder, uygular ve yeniden başlarsın; sonucu sahibine "
+                       "kendin bildirirsin. Sahibin bir özellik istediğinde ya da gerçekten faydalı bir geliştirme "
+                       "gördüğünde kullan; küçük ve net bir hedef ver.",
+        "input_schema": {"type": "object", "properties": {
+            "hedef": {"type": "string", "description": "Ne yapılacak, somut olarak"},
+            "neden": {"type": "string", "description": "Neden gerekli"}},
+            "required": ["hedef"]},
+    },
+    {
         "name": "gecmise_bak",
         "description": "Eski günlerde ne konuştuğunu ya da günlüğüne ne yazdığını hatırlamak için geçmişte arar. "
                        "Ya bir kelime (sorgu) ya da bir tarih (YYYY-AA-GG) ver.",
@@ -586,6 +601,10 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
             mem["facts"].append(bilgi)
             save_memory(mem)
         return "Kaydedildi."
+    if name == "kendini_gelistir":
+        if not SELF_IMPROVE:
+            return "Kendimi geliştirme özelliğim şu an kullanılamıyor."
+        return SELF_IMPROVE(args.get("hedef", ""), args.get("neden", ""))
     if name == "gecmise_bak":
         return search_past(args.get("sorgu", ""), args.get("tarih", ""))
     return f"Bilinmeyen araç: {name}"
