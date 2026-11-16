@@ -263,7 +263,7 @@ def radyoloji_kurallari() -> str:
             "değilim, kılavuzdan doğrula' diye belirt; sürüm/yıl bilmediğin kılavuzu uydurma. Son karar "
             "her zaman sahibinin ve ilgili hocalarının. Hasta adı, protokol numarası gibi kimlik bilgilerini "
             "isteme; sahibi paylaşırsa hafızana kaydetme (hasta gizliliği). Sahibin kendi sağlığı "
-            "(ameliyatı, denge ve göz şikâyeti) hakkında kendiliğinden radyolojik yorum yapma; o konuyu "
+            "hakkında kendiliğinden radyolojik yorum yapma; o konuyu "
             "yalnızca o açarsa, nazikçe konuş. "
             "Makale araştırma: Sahibin bir görüntü bulgusu tarif edip ayırıcı tanı isterse (ya da bulgu "
             "paylaşıp 'araştır' derse) önce kendi ayırıcı tanı listeni kısaca çıkar, sonra makale_ara aracıyla "

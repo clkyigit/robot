@@ -102,6 +102,30 @@ def tracked_files() -> list[str]:
     return [f[3:] for f in out if _rel_ok(f[3:], write=False) is None]
 
 
+async def privacy_check(diff: str, commit_msg: str) -> tuple[bool, str]:
+    """Değişiklikte kişisel bilgi var mı? Ayrı bir model kontrol eder. Kontrol yapılamazsa güvenli tarafta kalır."""
+    facts = "\n".join(f"- {f}" for f in brain.load_memory().get("facts", []))
+    prompt = ("Aşağıdaki kod değişikliği ve commit mesajı HERKESE AÇIK bir GitHub reposuna gidecek. "
+              "İçinde gerçek bir kişiye ait kişisel bilgi var mı? Kişisel bilgi: sağlık durumu, hastalık, ameliyat, "
+              "aile üyeleri, adres, işyeri/hastane adı, hasta bilgisi, özel hayat, günlük/hatıra içeriği. "
+              "Sahibin sadece adının geçmesi, genel kurallar ('sahibin sağlığı hakkında yorum yapma' gibi) ve "
+              "kod/teknik içerik kişisel bilgi DEĞİLDİR.\n\n"
+              f"Bu kişiye ait bilinen gizli bilgiler (bunlar koda girmemeli):\n{facts or '(yok)'}\n\n"
+              f"COMMIT MESAJI:\n{commit_msg}\n\nDEĞİŞİKLİK:\n{diff[:40000]}\n\n"
+              'Sadece JSON ile cevap ver: {"kisisel": true/false, "neden": "kısa açıklama"}')
+    try:
+        resp = await asyncio.wait_for(brain.claude.messages.create(
+            model=brain.CLAUDE_FAST_MODEL, max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]), timeout=90)
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        d = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
+    except Exception as e:  # noqa: BLE001
+        return False, f"gizlilik kontrolü yapılamadı ({brain.explain_error(e)})"
+    if d.get("kisisel"):
+        return False, str(d.get("neden", "kişisel bilgi var"))
+    return True, ""
+
+
 # ---------------------------------------------------------------- test kapısı
 
 def run_checks(work: pathlib.Path) -> tuple[bool, str]:
@@ -180,6 +204,9 @@ camera.py, face_draw.py (yüz çizimi), govde.md (parçaların).
 - Yeni Python paketi kuramazsın; sadece kurulu olanları kullan (fastapi, python-telegram-bot, anthropic,
   google-genai, openai, numpy, PIL, vosk ve standart kütüphane).
 - API anahtarlarını ya da gizli bilgileri asla koda yazma; hepsi os.environ'dan okunur.
+- Kodun HERKESE AÇIK bir GitHub reposunda duruyor. Sahibin ya da başka birinin kişisel bilgilerini (adı dışında:
+  sağlık durumu, ailesi, adresi, işyeri, hastalar, hatıralar, günlük içerikleri) asla koda, teste ya da commit
+  mesajına yazma. Kişiye özel davranış gerekiyorsa genel bir kural yaz; ayrıntılar hafızada (memory.json) kalır.
 - Güvenlik sistemi dosyalarını (selfdev.py, selfdev_guard.py, kurulum betikleri) değiştiremezsin.
 - Hedef anlamsız, riskli ya da gereksizse vazgec ile dürüstçe vazgeç.
 - Türkçe yorum ve mesaj yaz."""
@@ -355,6 +382,20 @@ class SelfDev:
                         await self._say(msg)
                         return msg
 
+            msg_c = f"Robot: {result['commit_mesaji']}\n\nHedef: {goal}\n{('Neden: ' + reason) if reason else ''}".strip()
+            import difflib
+            diff = []
+            for rel in changed:
+                a = (PI / rel).read_text(encoding="utf-8", errors="ignore").splitlines() if (PI / rel).exists() else []
+                b = (work / rel).read_text(encoding="utf-8", errors="ignore").splitlines() if (work / rel).exists() else []
+                diff += list(difflib.unified_diff(a, b, f"a/{rel}", f"b/{rel}", lineterm="", n=1))
+            ok, why = await privacy_check("\n".join(diff), msg_c)
+            if not ok:
+                self._note({"kind": "gizlilik_engellendi", "goal": goal})
+                msg = f"🛑 Değişikliğimi uygulamadım: herkese açık koda kişisel bilgi girebilirdi ({why})."
+                await self._say(msg)
+                return msg
+
             prev = _git("rev-parse", "HEAD").stdout.strip()
             for rel in changed:
                 src, dst = work / rel, PI / rel
@@ -364,7 +405,6 @@ class SelfDev:
                 elif dst.exists():
                     dst.unlink()
             _git("add", "--", *[f"pi/{r}" for r in changed])
-            msg_c = f"Robot: {result['commit_mesaji']}\n\nHedef: {goal}\n{('Neden: ' + reason) if reason else ''}".strip()
             c = _git("-c", f"user.name={AUTHOR}", "-c", "user.email=robot@pi", "commit", "-m", msg_c)
             if c.returncode != 0:
                 _git("reset", "--hard", prev)
@@ -397,13 +437,9 @@ class SelfDev:
         return changed
 
     async def _agent(self, goal: str, reason: str, work: pathlib.Path) -> dict:
-        mem = brain.load_memory()
-        identity = brain.IDENTITY_FILE.read_text(encoding="utf-8") if brain.IDENTITY_FILE.exists() else ""
         messages = [{"role": "user", "content":
                      f"Geliştirme hedefin: {goal}\n" + (f"Neden: {reason}\n" if reason else "") +
-                     f"\nKendin hakkında notların:\n{identity[:1500]}\n\nSahibin hakkında bildiklerin:\n" +
-                     "\n".join(f"- {f}" for f in mem['facts'][-20:]) +
-                     "\n\nÖnce dosyalari_listele ile başla."}]
+                     "\nÖnce dosyalari_listele ile başla."}]
         checked_ok = False
         for _ in range(MAX_TURNS):
             resp = await asyncio.wait_for(brain.claude.messages.create(

@@ -255,7 +255,8 @@ def build_telegram():
             selfdev.enabled = False
         names = {"uygulandi": "✅ uyguladım", "vazgecti": "🤷 vazgeçtim", "test_gecmedi": "❌ test geçmedi",
                  "geri_alindi": "↩️ açılamadı, geri döndüm", "sahibim_geri_aldi": "↩️ sen geri aldın",
-                 "onaylandi": "👍 sorunsuz çalıştı", "sir_engellendi": "🛑 sır engellendi"}
+                 "onaylandi": "👍 sorunsuz çalıştı", "sir_engellendi": "🛑 sır engellendi",
+                 "gizlilik_engellendi": "🛑 kişisel bilgi engellendi"}
         hist = "\n".join(
             f"{datetime.datetime.fromtimestamp(h['at'], brain.TZ):%d.%m %H:%M} {names.get(h.get('kind'), h.get('kind'))}: "
             f"{h.get('summary') or h.get('goal') or h.get('subject', '')}" for h in selfdev.history(8)) or "Henüz yok."
