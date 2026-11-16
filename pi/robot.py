@@ -269,7 +269,9 @@ def build_telegram():
         if not goal:
             await update.message.reply_text("Ne geliştireyim? Örnek: /gelistir hava durumunu söyleyebileyim")
             return
-        await update.message.reply_text(selfdev.request(goal, "Sahibim istedi"))
+        msg = selfdev.request(goal, "Sahibim istedi")
+        if not msg.startswith("Kendimi geliştirmeye başladım"):   # başladıysa zaten haber veriyor
+            await update.message.reply_text(msg)
 
     async def cmd_geri_al(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
