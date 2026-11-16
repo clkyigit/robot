@@ -145,10 +145,39 @@ def build_telegram():
         if not await guard(update):
             return
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-        file = await update.message.photo[-1].get_file()
-        img = bytes(await file.download_as_bytearray())
-        caption = update.message.caption or "Bu fotoğrafa ne dersin?"
-        seen = await brain.describe_image(img, caption)
+        msg = update.message
+        try:
+            if msg.photo:
+                file = await msg.photo[-1].get_file()      # en büyük boyut
+            elif msg.document and (msg.document.mime_type or "").startswith("image/"):
+                file = await msg.document.get_file()       # dosya olarak gönderilen görsel
+            else:
+                await msg.reply_text("⚠️ Mesajda görsel bulamadım, bu yüzden bir şey göremedim.")
+                return
+            img = bytes(await file.download_as_bytearray())
+        except Exception as e:  # noqa: BLE001
+            log.warning("Telegram fotoğrafı indirilemedi: %s", e)
+            await msg.reply_text(f"⚠️ Fotoğrafı Telegram'dan indiremedim, göremiyorum: {e}")
+            return
+        if not img:
+            await msg.reply_text("⚠️ Fotoğraf boş geldi, göremiyorum. Tekrar gönderir misin?")
+            return
+        caption = msg.caption or "Bu fotoğrafa ne dersin?"
+        try:
+            # Görsel doğrudan ana modele verilir
+            reply = await brain.chat_image(caption, img, "telegram")
+            await reply_long(update, reply)
+            return
+        except Exception as e:  # noqa: BLE001
+            log.warning("Fotoğraf doğrudan modele verilemedi: %s", e)
+            why = str(e)
+        # Yedek yol: görseli doğrudan veremedik; yalnızca yazılı açıklamayla devam et ve bunu açıkça söyle
+        try:
+            seen = await brain.describe_image(img, caption)
+        except Exception as e:  # noqa: BLE001
+            await msg.reply_text(f"⚠️ Fotoğrafı göremedim ({why}). Açıklama yolu da çalışmadı: {e}")
+            return
+        await msg.reply_text(f"⚠️ Fotoğrafı doğrudan göremedim ({why}); yalnızca açıklamasına dayanarak cevap veriyorum.")
         await answer(update, context, f"[Sana bir fotoğraf gönderdim. Gözlerin şunu görüyor: {seen}]\n{caption}")
 
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,7 +339,7 @@ def build_telegram():
     app.add_handler(CommandHandler("gunluk", cmd_gunluk))
     app.add_handler(CommandHandler("kimlik", cmd_kimlik))
     app.add_handler(CommandHandler("sus", cmd_sus))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
 

@@ -335,6 +335,90 @@ def system_prompt(mem: dict, channel: str = "") -> str:
     return "\n\n".join(parts)
 
 
+# ---------------------------------------------------------------- gelen fotoğraf (doğrudan görme)
+
+
+def prepare_image(img: bytes, max_side: int = 1568) -> tuple[bytes, str]:
+    """Gelen görseli modele uygun hale getirir: büyükse küçültür, JPEG'e çevirir.
+
+    (bayt, mime) döner. Görsel bozuksa ValueError fırlatır.
+    """
+    import io
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(img))
+        im.load()
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"Görsel açılamadı: {e}") from e
+    if max(im.size) > max_side:
+        im.thumbnail((max_side, max_side))
+    if im.mode != "RGB":
+        im = im.convert("RGB")
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=88)
+    return buf.getvalue(), "image/jpeg"
+
+
+def _reply_text(resp) -> str:
+    return "".join(getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text").strip()
+
+
+async def chat_image(text: str, img: bytes, channel: str = "telegram") -> str:
+    """Sahibinin gönderdiği fotoğrafı doğrudan modele (Claude, olmazsa Gemini) verip cevap döner.
+
+    Hiçbir model görseli göremezse RuntimeError fırlatır; çağıran bunu sahibine açıkça söylemelidir.
+    """
+    if not claude and not gemini:
+        raise RuntimeError("Görsel görebilen bir model yok (Claude/Gemini anahtarı tanımlı değil)")
+    data, mime = prepare_image(img)
+    text = (text or "").strip() or "Bu fotoğrafa ne dersin?"
+    async with _think_lock:
+        mem = load_memory()
+        system = system_prompt(mem, channel) + (
+            "\n\nSahibin bu mesajda sana bir fotoğraf gönderdi ve fotoğraf mesajına ekli; onu doğrudan görüyorsun. "
+            "Gördüklerini yorumla, görmediğin ayrıntıyı uydurma.")
+        # Önceki konuşmadan yalnızca düz metin mesajları bağlam olarak al
+        hist = [{"role": m["role"], "content": m["content"]} for m in mem.get("history", [])[-10:]
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
+        while hist and hist[0]["role"] != "user":
+            hist.pop(0)
+        reply, last_err = "", None
+        if claude:
+            try:
+                content = [{"type": "image", "source": {"type": "base64", "media_type": mime,
+                                                        "data": base64.b64encode(data).decode()}},
+                           {"type": "text", "text": text}]
+                resp = await asyncio.wait_for(claude.messages.create(
+                    model=CLAUDE_MODEL, max_tokens=1024, system=system,
+                    messages=hist + [{"role": "user", "content": content}]), 60)
+                reply = _reply_text(resp)
+                _mark("claude", True)
+            except Exception as e:  # noqa: BLE001
+                _mark("claude", False, e)
+                last_err = e
+        if not reply and gemini:
+            try:
+                part = gtypes.Part.from_bytes(data=data, mime_type=mime)
+                resp = await gemini_generate([part, f"{system}\n\nSahibin yazdığı: {text}"], timeout=60)
+                reply = (resp.text or "").strip()
+                _mark("gemini", True)
+            except Exception as e:  # noqa: BLE001
+                _mark("gemini", False, e)
+                last_err = e
+        if not reply:
+            raise RuntimeError(f"Fotoğrafı modele veremedim: {explain_error(last_err) if last_err else 'boş cevap'}")
+        try:
+            mem.setdefault("history", [])
+            mem["history"] += [{"role": "user", "content": f"[Fotoğraf gönderdi] {text}"},
+                               {"role": "assistant", "content": reply}]
+            save_memory(mem)
+            log_event("user", f"[fotoğraf] {text}", channel)
+            log_event("assistant", reply, channel)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Fotoğraf konuşması kaydedilemedi: %s", e)
+        return reply
+
+
 # ---------------------------------------------------------------- günlük
 
 
