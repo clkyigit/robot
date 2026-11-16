@@ -226,6 +226,13 @@ def _ago(seconds: float) -> str:
     return f"{int(seconds // 86400)} gün önce"
 
 
+def yilin_gunu(n: datetime.datetime | datetime.date) -> tuple[int, int]:
+    """(yılın kaçıncı günü, yılın toplam gün sayısı) döner. Örn. 1 Şubat -> (32, 365)."""
+    gun_no = n.timetuple().tm_yday
+    toplam = 366 if (n.year % 4 == 0 and (n.year % 100 != 0 or n.year % 400 == 0)) else 365
+    return gun_no, toplam
+
+
 def system_prompt(mem: dict, channel: str = "") -> str:
     if PERSONA_FILE.exists():
         persona = PERSONA_FILE.read_text(encoding="utf-8")
@@ -236,11 +243,15 @@ def system_prompt(mem: dict, channel: str = "") -> str:
     n = datetime.datetime.now(TZ)
     gun = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")[n.weekday()]
     now = n.strftime("%d.%m.%Y %H:%M, ") + gun
+    gun_no, yil_toplam = yilin_gunu(n)
     facts = "\n".join(f"- {f}" for f in mem["facts"]) or "(henüz yok)"
     parts = [persona,
              f"Şu anki tarih ve saat: {now}. Bu bilgi her mesajda sistem saatinden yeniden okunur, kesin doğrudur; "
              "saat ya da tarih sorulursa çekinmeden bunu söyle.",
-             "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
+             f"Bugün yılın {gun_no}. günü (bu yıl toplam {yil_toplam} gün). Sahibin saati sorarsa saati söylerken "
+               "yılın kaçıncı günü olduğunu da kısaca ekle (örn. 'Saat 14:05, yılın 71. günündeyiz'); "
+               "bu sayıyı kendin hesaplama, yalnızca buradaki sayıyı kullan.",
+               "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
              "fotograf_cek aracını gerçekten kullandıysan söyle; kullanmadıysan asla görmüş gibi anlatma, gerekiyorsa "
              "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle. "
                "Sistem durumu (CPU sıcaklığı, bellek, disk, yük, Wi-Fi, çalışma süresi) sorulursa sayıları asla "
