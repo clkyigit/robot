@@ -233,6 +233,24 @@ def yilin_gunu(n: datetime.datetime | datetime.date) -> tuple[int, int]:
     return gun_no, toplam
 
 
+def yas_hesapla(dogum_yili: int, hedef_yil: int) -> str:
+    """'X yılında doğan biri Y yılında kaç yaşında?' sorusunu yanıtlar (yalnızca yıl farkına göre).
+
+    Gün/ay bilinmediği için sonuç, o yılın sonunda doldurulacak yaştır; doğum günü
+    geçmemişse bir eksik olabilir.
+    """
+    if isinstance(dogum_yili, bool) or isinstance(hedef_yil, bool):
+        raise ValueError("Yıl sayı olmalı")
+    dogum_yili, hedef_yil = int(dogum_yili), int(hedef_yil)
+    fark = hedef_yil - dogum_yili
+    if fark < 0:
+        return f"{dogum_yili} yılında doğan biri {hedef_yil} yılında henüz doğmamış olur ({-fark} yıl sonra doğacak)."
+    if fark == 0:
+        return f"{dogum_yili} yılında doğan biri {hedef_yil} yılında doğduğu yıldadır (0 yaşında, bebek)."
+    return (f"{dogum_yili} yılında doğan biri {hedef_yil} yılında {fark} yaşında olur "
+            f"(doğum günü ayı belli değilse yıl içinde {fark - 1} ya da {fark} olabilir).")
+
+
 def system_prompt(mem: dict, channel: str = "") -> str:
     if PERSONA_FILE.exists():
         persona = PERSONA_FILE.read_text(encoding="utf-8")
@@ -251,6 +269,11 @@ def system_prompt(mem: dict, channel: str = "") -> str:
              f"Bugün yılın {gun_no}. günü (bu yıl toplam {yil_toplam} gün). Sahibin saati sorarsa saati söylerken "
                "yılın kaçıncı günü olduğunu da kısaca ekle (örn. 'Saat 14:05, yılın 71. günündeyiz'); "
                "bu sayıyı kendin hesaplama, yalnızca buradaki sayıyı kullan.",
+               "Yaş hesabı: Sahibin 'X yılında doğan biri Y yılında kaç yaşında' gibi bir şey sorarsa yaş = Y - X "
+                 "(yıl farkı) işlemini dikkatle yap ve sonucu söyle; gün/ay verilmediyse doğum günü henüz "
+                 "geçmemişse bir eksik olabileceğini kısaca belirt. Y, X'ten küçükse kişinin henüz doğmadığını söyle. "
+                 f"Örnek: 1990'da doğan biri 2025'te 35 yaşında olur. Bugünün yılı {n.year}; "
+                 "'şimdi', 'bu yıl' denirse bu yılı kullan.",
                "Dürüstlük kuralları: Bir şeye kamerayla baktığını, gördüğünü ya da fotoğraf çektiğini ancak o mesajda "
              "fotograf_cek aracını gerçekten kullandıysan söyle; kullanmadıysan asla görmüş gibi anlatma, gerekiyorsa "
              "aracı kullan. Bilmediğin bir şeyi uydurma; emin değilsen söyle. "
