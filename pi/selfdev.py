@@ -112,15 +112,28 @@ async def privacy_check(diff: str, commit_msg: str) -> tuple[bool, str]:
               "kod/teknik içerik kişisel bilgi DEĞİLDİR.\n\n"
               f"Bu kişiye ait bilinen gizli bilgiler (bunlar koda girmemeli):\n{facts or '(yok)'}\n\n"
               f"COMMIT MESAJI:\n{commit_msg}\n\nDEĞİŞİKLİK:\n{diff[:40000]}\n\n"
-              'Sadece JSON ile cevap ver: {"kisisel": true/false, "neden": "kısa açıklama"}')
-    try:
-        resp = await asyncio.wait_for(brain.claude.messages.create(
-            model=brain.CLAUDE_FAST_MODEL, max_tokens=300,
-            messages=[{"role": "user", "content": prompt}]), timeout=90)
-        text = "".join(b.text for b in resp.content if b.type == "text")
-        d = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
-    except Exception as e:  # noqa: BLE001
-        return False, f"gizlilik kontrolü yapılamadı ({brain.explain_error(e)})"
+              "Kararını karar aracıyla bildir.")
+    tool = {"name": "karar", "description": "Gizlilik kararını bildir.",
+            "input_schema": {"type": "object", "properties": {
+                "kisisel": {"type": "boolean", "description": "Kişisel bilgi var mı"},
+                "neden": {"type": "string", "description": "Kısa açıklama"}},
+                "required": ["kisisel", "neden"]}}
+    d, last_err = None, None
+    for model in dict.fromkeys([brain.CLAUDE_FAST_MODEL, brain.CLAUDE_MODEL]):
+        try:
+            resp = await asyncio.wait_for(brain.claude.messages.create(
+                model=model, max_tokens=500, tools=[tool], tool_choice={"type": "tool", "name": "karar"},
+                messages=[{"role": "user", "content": prompt}]), timeout=90)
+            d = next((b.input for b in resp.content if b.type == "tool_use"), None)
+            if isinstance(d, dict) and "kisisel" in d:
+                break
+            last_err = RuntimeError("karar gelmedi")
+            d = None
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            log.warning("Gizlilik kontrolü (%s) olmadı: %s", model, e)
+    if d is None:
+        return False, f"gizlilik kontrolü yapılamadı ({brain.explain_error(last_err) if last_err else '?'})"
     if d.get("kisisel"):
         return False, str(d.get("neden", "kişisel bilgi var"))
     return True, ""
