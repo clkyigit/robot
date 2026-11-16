@@ -103,7 +103,7 @@ kendisi faydalı görünce) ve her gece günlükten sonra kendini gözden geçir
 - Uyguladıktan sonra yeniden başlar; 90 sn sağlıklı çalışırsa onaylanır (ve `GITHUB_PUSH_TOKEN` varsa GitHub'a gönderilir).
   Açılamazsa `selfdev_guard.py` (systemd ExecStartPre) 3 denemeden sonra önceki sürüme döner.
 - Her adımı Telegram'a ve uygulamaya yazar. Telegram: `/gelisim`, `/gelistir <hedef>`, `/geri_al`, `/gelisim kapat`.
-- Ayarlar: `SELFDEV=0` (kapalı), `SELFDEV_MAX_PER_DAY` (5; 0 = sınırsız).
+- Ayarlar: `SELFDEV=0` (kapalı), `SELFDEV_MAX_PER_DAY` (varsayılan 0 = sınırsız).
 
 Kurulum (bir kez): `bash pi/gelisim_kurulum.sh`. Robot GitHub'a gönderiyorsa, bilgisayarda çalışmadan önce `git pull`.
 

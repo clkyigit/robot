@@ -12,7 +12,7 @@ Değiştirilemez güvenlik kuralları (bu dosya ve koruma dosyası robotun kendi
   - Değişiklikte API anahtarı/sır varsa uygulanmaz.
   - Test kapısını geçmeyen kod uygulanmaz.
 
-Ayarlar (.env): SELFDEV=1 (0: kapalı), SELFDEV_MAX_PER_DAY=5, GITHUB_PUSH_TOKEN (isteğe bağlı; yoksa sadece Pi'de kalır)
+Ayarlar (.env): SELFDEV=1 (0: kapalı), SELFDEV_MAX_PER_DAY=0 (sınırsız), GITHUB_PUSH_TOKEN (isteğe bağlı; yoksa sadece Pi'de kalır)
 """
 
 import asyncio
@@ -41,7 +41,7 @@ PENDING = STATE / "pending.json"
 ROLLED = STATE / "rolled_back.json"
 HISTORY = STATE / "history.jsonl"
 
-MAX_PER_DAY = int(os.environ.get("SELFDEV_MAX_PER_DAY", "5"))
+MAX_PER_DAY = int(os.environ.get("SELFDEV_MAX_PER_DAY", "0"))   # 0: sınırsız
 CONFIRM_AFTER = 90          # yeni kod bu kadar saniye sağlıklı çalışırsa onaylanır
 MAX_TURNS = 30              # geliştirme ajanının en fazla araç turu
 
