@@ -57,6 +57,13 @@ API_TOKEN=...          # kurulum betiği üretir
 
 İsteğe bağlı: `CLAUDE_MODEL`, `CLAUDE_FAST_MODEL`, `GEMINI_MODELS` (virgülle ayrılmış, sırayla denenir), `OPENAI_MODEL`, `ROBOT_PORT` (varsayılan 8080).
 
+## Fan (GPIO)
+
+Pi 5'in fan soketi hasarlı olduğu için Active Cooler GPIO'ya lehimli: kırmızı +5V → pin 4, siyah GND → pin 14,
+mavi PWM → pin 32 (GPIO12), sarı devir → pin 36 (GPIO16). `bash pi/fan_kurulum.sh` ile `robot-fan.service` kurulur:
+sıcaklığa göre hız (45 °C altı durur, 75 °C'de tam hız), devri `/dev/shm/robot-fan.json`'a yazar, robot oradan okur.
+Servis durursa ya da sıcaklık okunamazsa fan tam hızda döner. `fan.py` robotun kendini geliştirmesinden korunur.
+
 ## Kulaklar (mikrofon)
 
 INMP441 I2S mikrofon: VDD→pin 1, GND→pin 6, L/R→GND, SCK→pin 12, WS→pin 35, SD→pin 38.

@@ -37,7 +37,20 @@ def cpu_temp() -> float | None:
     return int(v) / 1000 if v.isdigit() else None
 
 
+def fan_status() -> dict | None:
+    """GPIO'ya bağlı fanın servisi (fan.py) durumunu /dev/shm/robot-fan.json'a yazar."""
+    import json
+    try:
+        d = json.loads(pathlib.Path("/dev/shm/robot-fan.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return d if time.time() - d.get("t", 0) < 30 else None
+
+
 def fan_rpm() -> int | None:
+    st = fan_status()
+    if st and st.get("rpm") is not None:
+        return int(st["rpm"])
     for p in glob.glob("/sys/devices/platform/cooling_fan/hwmon/hwmon*/fan1_input"):
         v = _read(p)
         if v.isdigit():
@@ -224,7 +237,12 @@ def describe(extra: list[str] | None = None) -> str:
         feel = "serin" if t < 55 else "ılık" if t < 70 else "sıcak" if t < 80 else "çok sıcak, tehlikeli"
         lines.append(f"- İşlemci sıcaklığım {feel} (sayı aşağıdaki ölçümde).")
     if s["fan_rpm"] is not None:
-        lines.append(f"- Fanım {'dönüyor, ' + str(s['fan_rpm']) + ' devir' if s['fan_rpm'] > 0 else 'dönmüyor'}.")
+        st = fan_status()
+        if st and st.get("duty") == 0:
+            lines.append("- Fanım şu an duruyor (serin olduğum için gerek yok).")
+        else:
+            duty = f", %{st['duty']} hızda" if st and st.get("duty") is not None else ""
+            lines.append(f"- Fanım {'dönüyor' + duty + ', ' + str(s['fan_rpm']) + ' devir' if s['fan_rpm'] > 0 else 'dönmüyor (hız komutu verildiği halde)'}.")
     if s["throttled"]:
         lines.append(f"- Güç/ısı uyarısı: {', '.join(s['throttled'])}.")
     # Sayılar hafızadan değil, bu çağrıda Pi'den ölçülür (birim ve zamanla)

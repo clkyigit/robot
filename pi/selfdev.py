@@ -47,7 +47,7 @@ MAX_TURNS = 30              # geliştirme ajanının en fazla araç turu
 
 # Robotun DEĞİŞTİREMEYECEĞİ dosyalar (güvenlik sistemi ve kurulum)
 PROTECTED = {"selfdev.py", "selfdev_guard.py", "kurulum.sh", "kulak_kurulum.sh", "gelisim_kurulum.sh",
-             "requirements.txt"}
+             "requirements.txt", "fan.py", "fan_kurulum.sh"}
 # Robotun hiç OKUYAMAYACAĞI dosyalar (gizli/kişisel)
 SECRET_NAMES = {".env", "owner.json", "memory.json", "memory.tmp", "persona.md", "kimlik.md"}
 SECRET_DIRS = {"gunluk", ".selfdev", "venv", "models", "__pycache__"}
