@@ -57,6 +57,14 @@ API_TOKEN=...          # kurulum betiği üretir
 
 İsteğe bağlı: `CLAUDE_MODEL`, `CLAUDE_FAST_MODEL`, `GEMINI_MODELS` (virgülle ayrılmış, sırayla denenir), `OPENAI_MODEL`, `ROBOT_PORT` (varsayılan 8080).
 
+## Yüz (1.28" GC9A01 ekran)
+
+Bağlantı: VCC→17, GND→20, SCL→23, SDA→19, CS→24, DC→22 (GPIO25), RST→13 (GPIO27), BLK→18 (GPIO24).
+`bash pi/yuz_kurulum.sh` SPI'yi açar ve `robot-face.service`'i kurar. `face.py` yüzü canlandırır (göz kırpma,
+bakış), robot `/dev/shm/robot-face.json` ile ifade gönderir: "robot" deyince dinliyor, düşünürken düşünüyor,
+gece uykulu, 75 °C üstü terli; robot `yuz_ifadesi` aracıyla duygusunu kendisi seçebilir. Dinlenme yüzü
+`FACE_IDLE` (varsayılan meraklı). Renkler yanlışsa `FACE_BGR=0`, ters görünüyorsa `FACE_INVERT=0`, döndürmek için `FACE_ROTATE=90/180/270`.
+
 ## Fan (GPIO)
 
 Pi 5'in fan soketi hasarlı olduğu için Active Cooler GPIO'ya lehimli: kırmızı +5V → pin 4, siyah GND → pin 14,

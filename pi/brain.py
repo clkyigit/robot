@@ -8,6 +8,7 @@ Ayarlar .env dosyasından okunur.
 """
 
 import asyncio
+import contextlib
 import base64
 import datetime
 import json
@@ -79,8 +80,37 @@ CHANNELS = {
            "Henüz hoparlörün yok, cevabın Telegram'a yazı olarak gidecek; yine de konuşur gibi kısa cevap ver.",
 }
 
+# ---------------------------------------------------------------- yüz (ekran servisi face.py okur)
+FACE_FILE = pathlib.Path("/dev/shm/robot-face.json")
+FACE_EXPRESSIONS = ["normal", "mutlu", "dinliyor", "dusunuyor", "uykulu", "sicak", "saskin", "sevgi",
+                    "kafasi_karisik", "merakli"]
+_face_by_tool = False
+
+
+def set_face(expr: str | None, hold: float = 8.0) -> None:
+    """Ekrandaki yüzün ifadesini değiştirir (expr=None: dinlenme yüzüne dön)."""
+    try:
+        FACE_FILE.write_text(json.dumps({"expr": expr, "t": time.time(), "hold": hold}))
+    except OSError:
+        pass
+
+
 # Telegram ve uygulama aynı anda yazarsa hafıza bozulmasın diye tek kilit
 _think_lock = asyncio.Lock()
+
+
+@contextlib.asynccontextmanager
+async def _thinking():
+    """Düşünürken yüz 'düşünüyor' olur; bitince (araçla başka bir ifade seçilmediyse) dinlenme yüzüne döner."""
+    global _face_by_tool
+    async with _think_lock:
+        _face_by_tool = False
+        set_face("dusunuyor", 120)
+        try:
+            yield
+        finally:
+            if not _face_by_tool:
+                set_face(None)
 
 # Her modelin son durumu: uygulama ve /durum bunu gösterir
 HEALTH: dict = {name: {"ok": None, "error": "", "at": 0.0} for name in ("claude", "gemini", "openai")}
@@ -372,7 +402,7 @@ async def chat_image(text: str, img: bytes, channel: str = "telegram") -> str:
         raise RuntimeError("Görsel görebilen bir model yok (Claude/Gemini anahtarı tanımlı değil)")
     data, mime = prepare_image(img)
     text = (text or "").strip() or "Bu fotoğrafa ne dersin?"
-    async with _think_lock:
+    async with _thinking():
         mem = load_memory()
         system = system_prompt(mem, channel) + (
             "\n\nSahibin bu mesajda sana bir fotoğraf gönderdi ve fotoğraf mesajına ekli; onu doğrudan görüyorsun. "
@@ -691,6 +721,16 @@ async def transcribe(wav: bytes, hint: str = "") -> str:
 # ---------------------------------------------------------------- araçlar
 
 TOOLS = [
+    {
+        "name": "yuz_ifadesi",
+        "description": "Ekrandaki yüzünün (iki göz ve ağız, yuvarlak ekran) ifadesini birkaç saniyeliğine değiştirir. "
+                       "Gerçekten güçlü bir duygu hissettiğinde kullan (sevinç, şaşkınlık, sevgi, kafa karışıklığı, "
+                       "merak); her mesajda kullanma.",
+        "input_schema": {"type": "object", "properties": {
+            "ifade": {"type": "string", "enum": FACE_EXPRESSIONS},
+            "sure": {"type": "number", "description": "Kaç saniye (varsayılan 8)"}},
+            "required": ["ifade"]},
+    },
     {"name": "makale_ara",
      "description": "PubMed'de tıbbi/radyolojik makale arar. Sahibin verdiği görüntü bulgusu için ayırıcı tanı "
                     "konuşurken ya da bir tanının görüntüleme özelliklerini doğrulamak için kullan. Sorguyu "
@@ -755,6 +795,14 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
             mem["facts"].append(bilgi)
             save_memory(mem)
         return "Kaydedildi."
+    if name == "yuz_ifadesi":
+        global _face_by_tool
+        expr = args.get("ifade", "normal")
+        if expr not in FACE_EXPRESSIONS:
+            return f"Böyle bir ifade yok. Seçenekler: {', '.join(FACE_EXPRESSIONS)}"
+        set_face(expr, float(args.get("sure") or 8))
+        _face_by_tool = True
+        return f"Yüzün şimdi: {expr}"
     if name == "kendini_gelistir":
         if not SELF_IMPROVE:
             return "Kendimi geliştirme özelliğim şu an kullanılamıyor."
@@ -805,7 +853,7 @@ async def _think_gemini(system, history, user_text) -> str:
 
 async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink, channel: str = "") -> str:
     """Bir mesaja cevap üretir, sohbet geçmişini ve günün kaydını günceller."""
-    async with _think_lock:
+    async with _thinking():
         mem = load_memory()
         system = system_prompt(mem, channel)
         history = list(mem["history"])

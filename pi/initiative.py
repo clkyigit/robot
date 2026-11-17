@@ -182,6 +182,7 @@ class Initiative:
         now = datetime.datetime.now(brain.TZ)
         if not self._may_speak(now):
             return
+        brain.set_face("saskin", 4)
         img = await self._camera.photo()
         if not img:
             return

@@ -398,6 +398,7 @@ async def tell_owner(text: str = "", photo: bytes | None = None, kind: str = "ro
 
 async def on_wake() -> None:
     global _wake_msg
+    brain.set_face("dinliyor", 15)
     if EARS_NOTIFY_WAKE:
         _wake_msg = await tell_owner("👂 Dinliyorum...", record=False)
 
