@@ -98,6 +98,42 @@ brain.STATE_PROVIDER = self_state
 brain.SELF_IMPROVE = lambda goal, reason="": selfdev.request(goal, reason)
 
 
+# ================================================================ laptop ekranı (onaylı)
+# Laptoptaki RobotEkran programı /api/screen/poll ile sorar; istek varsa sahibine onay penceresi açar.
+SCREEN: dict = {"req": None, "future": None, "seen": 0.0}
+
+
+async def screen_look(question: str) -> str:
+    if time.time() - SCREEN["seen"] > 15:
+        return "Laptoptaki ekran paylaşım programı (RobotEkran) açık değil ya da bana bağlanmıyor."
+    if SCREEN["req"] is not None:
+        return "Laptopta zaten bekleyen bir onay isteğim var."
+    fut = asyncio.get_running_loop().create_future()
+    SCREEN["req"] = {"id": uuid.uuid4().hex[:10], "reason": question[:300]}
+    SCREEN["future"] = fut
+    try:
+        res = await asyncio.wait_for(fut, timeout=45)
+    except asyncio.TimeoutError:
+        return "Laptopta onay penceresine cevap gelmedi."
+    finally:
+        SCREEN["req"], SCREEN["future"] = None, None
+    if not res.get("approved"):
+        return res.get("error") or "Sahibim ekranına bakmama izin vermedi; buna saygı göster."
+    import base64
+    import binascii
+    try:
+        img = base64.b64decode(res.get("image", ""), validate=True)
+    except (binascii.Error, ValueError):
+        return "Ekran görüntüsü bozuk geldi."
+    brain.set_face("merakli", 6)
+    return "Laptop ekranına baktın. Gördüğün: " + await brain.describe_image(
+        img, f"Bu, sahibimin bilgisayar ekranının görüntüsü. {question} "
+             "Ekranda kişisel ya da hasta bilgisi (ad, TC no, protokol) varsa bunları tekrar etme.")
+
+
+brain.SCREEN_LOOK = screen_look
+
+
 def owner_id():
     if OWNER_FILE.exists():
         return json.loads(OWNER_FILE.read_text())["id"]
@@ -548,6 +584,13 @@ class LookIn(BaseModel):
     question: str = "Ne görüyorsun?"
 
 
+class ScreenAnswerIn(BaseModel):
+    id: str
+    approved: bool
+    image: str = ""
+    error: str = ""
+
+
 class SelfDevIn(BaseModel):
     goal: str
 
@@ -739,6 +782,24 @@ async def diary(day: str = ""):
         return {"day": day, "text": brain.diary_text(day) or ""}
     d = brain.recent_diaries(1)
     return {"day": d[-1][0], "text": d[-1][1]} if d else {"day": "", "text": ""}
+
+
+@api.get("/api/screen/poll", dependencies=auth)
+async def screen_poll():
+    """Laptoptaki RobotEkran programı birkaç saniyede bir sorar."""
+    SCREEN["seen"] = time.time()
+    return {"request": SCREEN["req"]} if SCREEN["req"] else {}
+
+
+@api.post("/api/screen/answer", dependencies=auth)
+async def screen_answer(body: ScreenAnswerIn):
+    req, fut = SCREEN["req"], SCREEN["future"]
+    if not req or body.id != req["id"] or fut is None or fut.done():
+        raise HTTPException(409, "Bekleyen istek yok")
+    if len(body.image) > 12 * 1024 * 1024:
+        raise HTTPException(413, "Görüntü çok büyük")
+    fut.set_result(body.model_dump())
+    return {"ok": True}
 
 
 @api.get("/api/self", dependencies=auth)

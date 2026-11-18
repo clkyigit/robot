@@ -71,6 +71,8 @@ if OPENAI_KEY:
 STATE_PROVIDER: Optional[Callable[[], str]] = None
 # Kendi kodunu geliştirme isteğini başlatan fonksiyon (robot.py ayarlar: selfdev.request)
 SELF_IMPROVE: Optional[Callable[[str, str], str]] = None
+# Laptop ekranına bakma (robot.py ayarlar; sahibin laptopta onay vermesi gerekir)
+SCREEN_LOOK: Optional[Callable[[str], Awaitable[str]]] = None
 
 CHANNELS = {
     "telegram": "Telegram'dan yazdı.",
@@ -722,6 +724,15 @@ async def transcribe(wav: bytes, hint: str = "") -> str:
 
 TOOLS = [
     {
+        "name": "laptop_ekrani",
+        "description": "Sahibinin (aynı ağdaki Windows) laptopunun ekranına bakar. Her seferinde laptopta onay penceresi "
+                       "çıkar; sahibin izin vermezse göremezsin. Sahibin ekranındaki bir şeyi sorduğunda ya da "
+                       "'ekranıma bak' dediğinde kullan; kendiliğinden sık sık kullanma.",
+        "input_schema": {"type": "object", "properties": {
+            "soru": {"type": "string", "description": "Ekranda neye bakacağın; onay penceresinde sahibine gösterilir"}},
+            "required": ["soru"]},
+    },
+    {
         "name": "yuz_ifadesi",
         "description": "Ekrandaki yüzünün (iki göz ve ağız, yuvarlak ekran) ifadesini birkaç saniyeliğine değiştirir. "
                        "Gerçekten güçlü bir duygu hissettiğinde kullan (sevinç, şaşkınlık, sevgi, kafa karışıklığı, "
@@ -810,6 +821,10 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
     if name == "makale_ara":
         import makale
         return await makale.makale_ara(str(args.get("sorgu", "")), args.get("adet", 5) or 5)
+    if name == "laptop_ekrani":
+        if not SCREEN_LOOK:
+            return "Laptop ekranına bakma özelliğim şu an kullanılamıyor."
+        return await SCREEN_LOOK(args.get("soru", "Ekranda ne var?"))
     if name == "gecmise_bak":
         return search_past(args.get("sorgu", ""), args.get("tarih", ""))
     return f"Bilinmeyen araç: {name}"

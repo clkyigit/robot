@@ -122,6 +122,12 @@ kendisi faydalı görünce) ve her gece günlükten sonra kendini gözden geçir
 
 Kurulum (bir kez): `bash pi/gelisim_kurulum.sh`. Robot GitHub'a gönderiyorsa, bilgisayarda çalışmadan önce `git pull`.
 
+## Laptop ekranı (Windows, onaylı)
+
+`laptop/ekran_paylas.py` GitHub'da `RobotEkran.exe` olarak derlenir (son-surum). Laptopta çalışır, robota sorar
+(`/api/screen/poll`); robot `laptop_ekrani` aracıyla bakmak isteyince laptopta İzin ver / 5 dk izin ver / Reddet
+penceresi çıkar. İzin verilirse ekran görüntüsü `/api/screen/answer` ile gönderilir, reddedilirse hiçbir şey gitmez.
+
 ## Uygulama API'si
 
 Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.
