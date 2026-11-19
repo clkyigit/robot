@@ -37,7 +37,7 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 CLAUDE_FAST_MODEL = os.environ.get("CLAUDE_FAST_MODEL", "claude-haiku-5-5")
 # Gemini sırayla denenir: biri yoğunsa (503) ya da yoksa sıradakine geçilir
 GEMINI_MODELS = [m.strip() for m in os.environ.get(
-    "GEMINI_MODELS", os.environ.get("GEMINI_MODEL", "") + ",gemini-3.8-flash,gemini-3.5-flash,gemini-2.5-flash,gemini-flash-latest"
+    "GEMINI_MODELS", os.environ.get("GEMINI_MODEL", "") + ",gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-flash-latest"
 ).split(",") if m.strip()]
 GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))  # tekrarları at, sırayı koru
 GEMINI_MODEL = GEMINI_MODELS[0]
