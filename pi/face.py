@@ -186,7 +186,7 @@ class Animator:
         if expr != self.expr:
             self.expr, self.changed = expr, now
             self.blink_start = now            # ifade değişirken göz kırpar: yumuşak geçiş
-        follow = (gaze.get("look") and now - gaze.get("look_t", 0) < 1.5
+        follow = (gaze.get("look") and now - gaze.get("look_t", 0) < 8      # kişi kıpırdamasa da son yerine bakar
                   and expr not in ("dusunuyor", "uykulu"))
         if follow:
             self.look_target = list(gaze["look"])     # kişiye bak

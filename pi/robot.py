@@ -240,6 +240,21 @@ def build_telegram():
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
         await reply_long(update, await brain.describe_image(img, "Ne görüyorsun?"))
 
+    async def cmd_bakis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gözlerin kamerada ne gördüğünü gösterir (bakış takibinin hata ayıklaması)."""
+        if not await guard(update):
+            return
+        st = gaze.status()
+        png = gaze.snapshot_png()
+        text = (f"Bakış: {'açık' if st['enabled'] else 'kapalı'}, yöntem: {st['method'] or '-'}, "
+                f"önümde biri {'var' if st['present'] else 'yok'}, son görme {st['last_seen_s']} sn önce, "
+                f"son kare: {gaze.kind or 'bir şey bulunamadı'}, sayılar: {gaze.counts}"
+                + (f", hata: {st['error']}" if st['error'] else ""))
+        if png:
+            await update.message.reply_photo(png, caption=text[:1000])
+        else:
+            await update.message.reply_text(text + " (henüz kare yok)")
+
     async def cmd_hafiza(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
@@ -369,6 +384,7 @@ def build_telegram():
            .connect_timeout(30).read_timeout(30).write_timeout(60).build())
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("foto", cmd_foto))
+    app.add_handler(CommandHandler("bakis", cmd_bakis))
     app.add_handler(CommandHandler("hafiza", cmd_hafiza))
     app.add_handler(CommandHandler("sifirla", cmd_sifirla))
     app.add_handler(CommandHandler("durum", cmd_durum))

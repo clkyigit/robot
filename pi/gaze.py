@@ -97,10 +97,30 @@ class Gaze:
         self.look_t = 0.0
         self.method = ""
         self.error = ""
+        self.frame = None              # son bakış karesi (sadece /bakis için bellekte; kaydedilmez)
+        self.spot = None
+        self.kind = ""                 # son karede ne bulundu: yüz / hareket / ""
+        self.counts = {"kare": 0, "yüz": 0, "hareket": 0}
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "present": self.present, "method": self.method,
                 "last_seen_s": int(time.time() - self.last_seen), "error": self.error}
+
+    def snapshot_png(self) -> bytes | None:
+        """Son bakış karesi: bulunan yer işaretli, küçük PNG (hata ayıklama için)."""
+        if self.frame is None:
+            return None
+        import io
+        from PIL import Image, ImageDraw
+        im = Image.fromarray(self.frame).convert("RGB").resize((640, 360))
+        d = ImageDraw.Draw(im)
+        if self.spot:
+            x, y = self.spot[0] * 640, self.spot[1] * 360
+            d.ellipse((x - 18, y - 18, x + 18, y + 18), outline=(255, 60, 60), width=4)
+        d.text((8, 8), f"{self.kind or 'bir sey yok'} | {self.counts}", fill=(255, 255, 0))
+        out = io.BytesIO()
+        im.save(out, "PNG")
+        return out.getvalue()
 
     def _write(self, active: bool) -> None:
         st = {"t": time.time(), "active": active, "present": self.present,
@@ -138,15 +158,20 @@ class Gaze:
                     self._write(False)
                     await asyncio.sleep(5)
                     continue
-                spot = None
+                spot, kind = None, ""
                 if finder is not None:
-                    faces = await asyncio.to_thread(finder.detectMultiScale, g, 1.2, 4, 0, (20, 20))
+                    faces = await asyncio.to_thread(finder.detectMultiScale, g, 1.15, 3, 0, (18, 18))
                     if len(faces):
                         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-                        spot = ((x + w / 2) / g.shape[1], (y + h / 2) / g.shape[0])
+                        spot, kind = ((x + w / 2) / g.shape[1], (y + h / 2) / g.shape[0]), "yüz"
                 if spot is None and prev is not None and prev.shape == g.shape:
                     spot = find_motion(prev, g)
+                    kind = "hareket" if spot else ""
                 prev = g
+                self.frame, self.spot, self.kind = g, spot, kind
+                self.counts["kare"] += 1
+                if kind:
+                    self.counts[kind] += 1
                 self._update(spot)
                 self.error = ""
             except Exception as e:  # noqa: BLE001
