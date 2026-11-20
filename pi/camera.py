@@ -295,6 +295,29 @@ class Camera:
             return None
         return await asyncio.to_thread(self._capture_jpeg)
 
+    def _glance_sync(self, step: int) -> Optional["object"]:
+        """Bakış için küçük gri kare (numpy, JPEG'siz, kaydedilmez). Döndürme ayarı uygulanır."""
+        import numpy as np
+        with self._lock:
+            self._last_use = time.time()
+            if not self._ensure_started():
+                return None
+            arr = self._cam.capture_array("main")
+        g = arr[::step, ::step, :3].mean(axis=2).astype(np.uint8)
+        if self.rotation:
+            g = np.ascontiguousarray(np.rot90(g, k=self.rotation // 90))   # saat yönünün tersine, foto ile aynı
+        return g
+
+    async def glance(self, step: int = 4):
+        """Hızlı küçük gri kare (1280x720 için step=4 -> 320x180). Gizlilik kapalıysa None."""
+        if not self.enabled:
+            return None
+        try:
+            return await asyncio.to_thread(self._glance_sync, step)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Bakış karesi alınamadı: %s", e)
+            return None
+
     async def idle_watcher(self) -> None:
         """Kimse kamerayı kullanmıyorsa kapatır (ısı ve gizlilik için)."""
         while True:

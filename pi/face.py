@@ -8,6 +8,7 @@ Bu servis yüzü canlandırır: göz kırpma, etrafa bakınma, ifadeler arası g
 kendi dinlenme yüzünü gösterir (gece uykulu, sıcakken terli).
 
 Deneme: python3 face.py --demo   (ifadeleri sırayla gösterir)
+Kamera bakışı: /dev/shm/robot-gaze.json (gaze.py) taze ise gözler kişiye bakar, kimse yoksa uyuklar.
 Ayarlar: FACE_SPI_HZ=40000000, FACE_FPS=15, FACE_ROTATE=0, FACE_BGR=1, FACE_INVERT=1
 """
 import json
@@ -24,6 +25,7 @@ import face_draw
 
 STATE = pathlib.Path("/dev/shm/robot-face.json")
 FAN_STATE = pathlib.Path("/dev/shm/robot-fan.json")
+GAZE = pathlib.Path("/dev/shm/robot-gaze.json")    # robotun kamerası: kişinin yeri ve var mı (gaze.py)
 DC, RST, BL = 25, 27, 24
 SPI_HZ = int(os.environ.get("FACE_SPI_HZ", "40000000"))
 FPS = float(os.environ.get("FACE_FPS", "15"))
@@ -142,7 +144,15 @@ def cpu_temp() -> float | None:
         return None
 
 
-def wanted_expression(now: float) -> str:
+def read_gaze(now: float) -> dict:
+    """Kameradan gelen bakış bilgisi; eskiyse (robot kapalı, kamera kapalı) boş döner."""
+    g = read_json(GAZE)
+    if not g.get("active") or now - g.get("t", 0) > 10:
+        return {}
+    return g
+
+
+def wanted_expression(now: float, gaze: dict | None = None) -> str:
     st = read_json(STATE)
     expr = st.get("expr")
     if expr in face_draw.COLORS and now - st.get("t", 0) < st.get("hold", 5):
@@ -150,6 +160,8 @@ def wanted_expression(now: float) -> str:
     t = cpu_temp()
     if t is not None and t >= 75:
         return "sicak"
+    if gaze and gaze.get("present") is False:
+        return "uykulu"                     # uzun süredir kimse yok
     hour = time.localtime(now).tm_hour
     if hour >= 23 or hour < 7:
         return "uykulu"
@@ -169,11 +181,17 @@ class Animator:
         self.changed = 0.0
 
     def frame(self, now: float):
-        expr = wanted_expression(now)
+        gaze = read_gaze(now)
+        expr = wanted_expression(now, gaze)
         if expr != self.expr:
             self.expr, self.changed = expr, now
             self.blink_start = now            # ifade değişirken göz kırpar: yumuşak geçiş
-        if now >= self.next_look:
+        follow = (gaze.get("look") and now - gaze.get("look_t", 0) < 1.5
+                  and expr not in ("dusunuyor", "uykulu"))
+        if follow:
+            self.look_target = list(gaze["look"])     # kişiye bak
+            self.next_look = now + random.uniform(1.0, 2.5)
+        elif now >= self.next_look:
             if expr in ("dusunuyor",):
                 self.look_target = [0.7, -0.9]
             elif expr in ("uykulu",):

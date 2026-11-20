@@ -30,6 +30,7 @@ from camera import camera  # noqa: E402
 from ears import WAKE_WORDS, ears, has_wake, strip_wake  # noqa: E402
 import body  # noqa: E402
 from initiative import initiative  # noqa: E402
+from gaze import gaze  # noqa: E402
 from selfdev import selfdev  # noqa: E402
 
 BASE = pathlib.Path(__file__).resolve().parent
@@ -81,6 +82,11 @@ TEMP_ALERT = float(os.environ.get("TEMP_ALERT", "75"))      # bu sıcaklığı g
 def self_state() -> str:
     """Beyne verilen anlık durum: beden + duyular."""
     extra = [f"Kameram (gözüm) {'açık' if camera.enabled else 'gizlilik için kapalı'}."]
+    gs = gaze.status()
+    if camera.enabled and gs["enabled"]:
+        extra.append("Ekrandaki gözlerim kamerayla önümdekine bakıyor; "
+                     + ("şu an önümde biri var." if gs["present"]
+                        else f"{gs['last_seen_s'] // 60} dakikadır kimseyi görmedim, uyukluyorum."))
     st = ears.status()
     if not st["enabled"]:
         extra.append("Kulaklarım (mikrofon) sahibim tarafından kapatıldı.")
@@ -536,6 +542,7 @@ async def lifespan(_app: FastAPI):
         store_photo(img)
 
     bg += initiative.start(tell_owner, camera, keep_photo)
+    bg += gaze.start(camera)
     bg += selfdev.start(tell_owner)
     st = brain.model_status()
     log.info("Robot başladı. Claude=%s Gemini=%s OpenAI=%s Telegram=%s API=%s port=%d",
