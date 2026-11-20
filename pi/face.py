@@ -168,6 +168,13 @@ def wanted_expression(now: float, gaze: dict | None = None) -> str:
     return IDLE if IDLE in face_draw.COLORS else "normal"
 
 
+def settle(old, new, dead: float = 0.04) -> list[float]:
+    """Titremeyi azaltır: yüz bulucunun küçük oynamalarını (ölü bölge altı) yok sayar."""
+    if old is not None and len(old) == 2 and all(abs(o - n) < dead for o, n in zip(old, new)):
+        return list(old)
+    return [float(new[0]), float(new[1])]
+
+
 class Animator:
     """Göz kırpma, bakış kayması ve ifade geçişi."""
 
@@ -179,6 +186,8 @@ class Animator:
         self.blink_start = 0.0
         self.expr = None
         self.changed = 0.0
+        self.following = False      # son karede kişiyi izliyor muydu
+        self.slow_until = 0.0       # bu zamana kadar yavaş yumuşatma (ortaya dönüş)
 
     def frame(self, now: float):
         gaze = read_gaze(now)
@@ -189,8 +198,18 @@ class Animator:
         follow = (gaze.get("look") and now - gaze.get("look_t", 0) < 8      # kişi kıpırdamasa da son yerine bakar
                   and expr not in ("dusunuyor", "uykulu"))
         if follow:
-            self.look_target = list(gaze["look"])     # kişiye bak
+            self.look_target = settle(self.look_target, gaze["look"])   # kişiye bak (titremesiz)
             self.next_look = now + random.uniform(1.0, 2.5)
+            self.following = True
+        elif self.following:
+            # yüz kayboldu: gözler yavaşça ortaya dönsün, sonra bakınmaya devam
+            self.following = False
+            if expr in ("dusunuyor", "uykulu"):
+                self.next_look = now
+            else:
+                self.look_target = [0.0, 0.0]
+                self.slow_until = now + 3.0
+                self.next_look = now + random.uniform(3.0, 5.0)
         elif now >= self.next_look:
             if expr in ("dusunuyor",):
                 self.look_target = [0.7, -0.9]
@@ -201,8 +220,9 @@ class Animator:
                 if random.random() < 0.4:
                     self.look_target = [0.0, 0.0]          # sık sık karşıya bakar
             self.next_look = now + random.uniform(1.5, 4.5)
+        alpha = 0.1 if now < self.slow_until else 0.35     # ortaya dönerken yavaş
         for i in (0, 1):
-            self.look[i] += (self.look_target[i] - self.look[i]) * 0.35
+            self.look[i] += (self.look_target[i] - self.look[i]) * alpha
         if now >= self.next_blink and expr not in ("uykulu", "mutlu"):
             self.blink_start = now
             self.next_blink = now + random.uniform(2.5, 6.0) * (0.5 if random.random() < 0.15 else 1)

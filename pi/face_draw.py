@@ -99,12 +99,14 @@ def face(expr: str = "normal", look=(0.0, 0.0), blink: float = 0.0, t: float = 0
         cheek = (90, 60, 70)
     else:
         cheek = None
+    # yüzün alt kısmı (yanak, ağız) bakış yönüne gözlerden daha az kayar: baş dönüyormuş gibi
+    fx, fy = look[0] * 5, look[1] * 4
     if cheek:
         for cx in (52, 188):
-            d.ellipse([S(cx - 14), S(140), S(cx + 14), S(152)], fill=cheek)
+            d.ellipse([S(cx - 14 + fx), S(140 + fy), S(cx + 14 + fx), S(152 + fy)], fill=cheek)
 
     # ağız ve süsler
-    mx, my = 120, 168
+    mx, my = 120 + fx, 168 + fy
     if expr in ("normal", "dinliyor"):
         d.arc([S(mx - 16), S(my - 12), S(mx + 16), S(my + 10)], 20, 160, fill=col, width=S(6))
     elif expr in ("mutlu", "sevgi"):
