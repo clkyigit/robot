@@ -10,13 +10,16 @@ OLD="$HOME/robot"
 cd "$DIR"
 
 echo "== 1/5 Sistem paketleri =="
-sudo apt install -y python3-venv python3-picamera2
+sudo apt install -y python3-venv python3-picamera2 python3-opencv
 
 echo "== 2/5 Python ortamı =="
 if [ ! -d venv ]; then
   python3 -m venv --system-site-packages venv   # kamera kütüphanesini görebilsin
 fi
 ./venv/bin/pip install -q -r requirements.txt
+if [ -f paketler.txt ]; then   # robotun kendini geliştirirken kurduğu paketler (sadece hazır derlenmiş)
+  ./venv/bin/pip install -q --only-binary :all: -r paketler.txt || echo "  (bazı robot paketleri kurulamadı)"
+fi
 
 echo "== 3/5 Ayar ve hafıza dosyaları =="
 for f in .env memory.json owner.json persona.md; do

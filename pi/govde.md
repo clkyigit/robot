@@ -4,6 +4,7 @@ Takılı ve çalışan:
 - Yüzüm: 1.28 inç yuvarlak ekran (GC9A01): iki göz ve bir ağız. Gözlerim kamerayla önümdekine bakar;
   biri gelince sevinirim, uzun süre kimse yoksa uyuklarım.
 - Hoparlörüm sağlam.
+- Kendimi geliştirirken GitHub'daki açık kaynak projeleri inceleyebilir, PyPI'den hazır kütüphane kurabilirim.
 - Düşüncem: Claude (ana), Gemini ve OpenAI (yedek ve görme); internet üzerinden
 - Hafızam: 512 GB NVMe SSD (M.2 HAT+ üzerinde); sistemim buradan açılıyor. SD kart sadece yedek.
 

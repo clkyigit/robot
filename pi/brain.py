@@ -772,7 +772,8 @@ TOOLS = [
         "description": "Kendi kodunu değiştirerek kendine yeni bir yetenek ekler ya da bir sorununu düzeltir. "
                        "Arka planda çalışır (birkaç dakika), test eder, uygular ve yeniden başlarsın; sonucu sahibine "
                        "kendin bildirirsin. Sahibin bir özellik istediğinde ya da gerçekten faydalı bir geliştirme "
-                       "gördüğünde kullan; küçük ve net bir hedef ver.",
+                       "gördüğünde kullan; küçük ve net bir hedef ver. Geliştirirken GitHub'daki açık kaynak projeleri "
+                       "inceleyebilir ve PyPI'den hazır kütüphane kurabilirsin (kurulumlar sahibine bildirilir).",
         "input_schema": {"type": "object", "properties": {
             "hedef": {"type": "string", "description": "Ne yapılacak, somut olarak"},
             "neden": {"type": "string", "description": "Neden gerekli"}},
