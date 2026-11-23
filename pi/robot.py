@@ -27,7 +27,7 @@ log = logging.getLogger("robot")
 
 import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
-from ears import WAKE_WORDS, ears, has_wake, strip_wake  # noqa: E402
+from ears import ears, has_wake, strip_wake  # noqa: E402
 import body  # noqa: E402
 from initiative import initiative  # noqa: E402
 from gaze import gaze  # noqa: E402
@@ -158,6 +158,9 @@ def build_telegram():
     from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
     async def guard(update: Update) -> bool:
+        # Düzenlenmiş mesaj, kanal gönderisi gibi güncellemelerde update.message yok: cevap verme (çökmesin)
+        if update.message is None or update.effective_user is None:
+            return False
         uid = update.effective_user.id
         oid = owner_id()
         if oid is None:
@@ -218,6 +221,9 @@ def build_telegram():
             seen = await brain.describe_image(img, caption)
         except Exception as e:  # noqa: BLE001
             await msg.reply_text(f"⚠️ Fotoğrafı göremedim ({why}). Açıklama yolu da çalışmadı: {e}")
+            return
+        if brain.describe_failed(seen):
+            await msg.reply_text(f"⚠️ Fotoğrafı göremedim ({why}). {seen}")
             return
         await msg.reply_text(f"⚠️ Fotoğrafı doğrudan göremedim ({why}); yalnızca açıklamasına dayanarak cevap veriyorum.")
         await answer(update, context, f"[Sana bir fotoğraf gönderdim. Gözlerin şunu görüyor: {seen}]\n{caption}")
@@ -512,10 +518,12 @@ async def diary_loop() -> None:
         with contextlib.suppress(Exception):
             await brain.write_diary(yesterday)
     hh, mm = (int(x) for x in DIARY_TIME.split(":"))
+    last_try = 0.0
     while True:
         now = datetime.datetime.now(brain.TZ)
         today = now.strftime("%Y-%m-%d")
-        if (now.hour, now.minute) >= (hh, mm) and not brain.diary_text(today):
+        if (now.hour, now.minute) >= (hh, mm) and not brain.diary_text(today) and time.time() - last_try > 1800:
+            last_try = time.time()   # olmazsa en erken 30 dk sonra tekrar dener
             try:
                 text = await brain.write_diary(today)
                 if text and DIARY_SHARE:
@@ -534,7 +542,14 @@ async def body_watch() -> None:
         t = body.cpu_temp()
         if t is not None and t >= TEMP_ALERT and time.time() - last_alert > 3600:
             last_alert = time.time()
-            await tell_owner(f"🥵 Çok ısındım: {t:.0f} °C. Fanım çalışmıyor; beni serin bir yere koyabilir "
+            fan = body.fan_status()
+            if fan and fan.get("rpm"):
+                why = f"Fanım tam gaz dönüyor ({fan['rpm']} devir) ama yetmiyor"
+            elif fan and not fan.get("error"):
+                why = "Fanıma dön komutu gidiyor ama dönmüyor gibi, bir bakar mısın"
+            else:
+                why = "Fan servisim çalışmıyor (robot-fan.service)"
+            await tell_owner(f"🥵 Çok ısındım: {t:.0f} °C. {why}; beni serin bir yere koyabilir "
                              "ya da biraz dinlendirebilir misin?", kind="uyari")
         await asyncio.sleep(60)
 
@@ -680,7 +695,14 @@ async def chat_photo(body: ChatPhotoIn):
     if len(img) > 8 * 1024 * 1024:
         raise HTTPException(413, "Fotoğraf çok büyük (en fazla 8 MB)")
     caption = body.text.strip() or "Bu fotoğrafa ne dersin?"
+    try:
+        return {"reply": await brain.chat_image(caption, img, "uygulama"), "photos": []}
+    except Exception as e:  # noqa: BLE001
+        log.warning("Uygulama fotoğrafı doğrudan modele verilemedi: %s", e)
+    # Yedek yol: sadece yazılı açıklamayla devam et
     seen = await brain.describe_image(img, caption)
+    if brain.describe_failed(seen):
+        raise HTTPException(503, f"Fotoğrafı göremedim: {seen}")
     photo_ids: list[str] = []
 
     async def send_photo(p: bytes) -> None:
@@ -801,6 +823,8 @@ async def diary_write():
 
 @api.get("/api/diary", dependencies=auth)
 async def diary(day: str = ""):
+    if day and not brain.valid_day(day):
+        raise HTTPException(400, "Gün YYYY-AA-GG biçiminde olmalı")
     if day:
         return {"day": day, "text": brain.diary_text(day) or ""}
     d = brain.recent_diaries(1)

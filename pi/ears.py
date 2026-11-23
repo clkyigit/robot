@@ -158,7 +158,14 @@ class Ears:
     def _call(self, coro) -> None:
         if self._loop:
             fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-            fut.add_done_callback(lambda f: f.exception() and log.error("Kulak geri çağırma hatası: %s", f.exception()))
+            fut.add_done_callback(self._report)
+
+    @staticmethod
+    def _report(f) -> None:
+        if f.cancelled():          # iptal edilmiş görevde f.exception() hata fırlatır
+            return
+        if f.exception():
+            log.error("Kulak geri çağırma hatası: %s", f.exception())
 
     def _run(self) -> None:
         try:
