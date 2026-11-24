@@ -548,7 +548,7 @@ async def body_watch() -> None:
             elif fan and not fan.get("error"):
                 why = "Fanıma dön komutu gidiyor ama dönmüyor gibi, bir bakar mısın"
             else:
-                why = "Fan servisim çalışmıyor (robot-fan.service)"
+                why = "Fanım şu an bağlı değil ya da çalışmıyor"
             await tell_owner(f"🥵 Çok ısındım: {t:.0f} °C. {why}; beni serin bir yere koyabilir "
                              "ya da biraz dinlendirebilir misin?", kind="uyari")
         await asyncio.sleep(60)
