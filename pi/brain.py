@@ -39,12 +39,16 @@ CLAUDE_FAST_MODEL = os.environ.get("CLAUDE_FAST_MODEL", "claude-haiku-5-5")
 GEMINI_MODELS = [m.strip() for m in os.environ.get(
     "GEMINI_MODELS", os.environ.get("GEMINI_MODEL", "") + ",gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-flash-latest"
 ).split(",") if m.strip()]
-GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS))  # tekrarları at, sırayı koru
+GEMINI_MODELS = list(dict.fromkeys(GEMINI_MODELS)) or ["gemini-flash-latest"]  # tekrarları at, sırayı koru
 GEMINI_MODEL = GEMINI_MODELS[0]
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 HISTORY_LIMIT = 30          # hafızada tutulan son mesaj sayısı
 FAST_MODEL_MAX_CHARS = 40   # bundan kısa mesajlar hızlı modele gider
+CALL_TIMEOUT = 90           # tek bir model çağrısı için en fazla bekleme (sn)
+# Claude araç kullanırken (fotoğraf + görme, laptop onayı, makale araması) tek cevap birkaç dakika sürebilir;
+# eskiden toplam 90 sn sınırı yüzünden araçlı cevaplar yarıda kesilip yedek modele düşüyordu.
+TOOL_CHAT_TIMEOUT = float(os.environ.get("TOOL_CHAT_TIMEOUT", "300"))
 
 # ---------------------------------------------------------------- istemciler
 
@@ -454,6 +458,14 @@ async def chat_image(text: str, img: bytes, channel: str = "telegram") -> str:
 # ---------------------------------------------------------------- günlük
 
 
+def valid_day(day: str) -> bool:
+    """Gün adı YYYY-AA-GG biçiminde mi? (Dosya yolu olarak kullanıldığı için başka bir şey kabul edilmez.)"""
+    try:
+        return datetime.datetime.strptime(day, "%Y-%m-%d").strftime("%Y-%m-%d") == day
+    except (TypeError, ValueError):
+        return False
+
+
 def _day(ts: float | None = None) -> str:
     return datetime.datetime.fromtimestamp(ts or time.time(), TZ).strftime("%Y-%m-%d")
 
@@ -467,6 +479,8 @@ def log_event(role: str, text: str, channel: str = "") -> None:
 
 
 def day_events(day: str) -> list[dict]:
+    if not valid_day(day):
+        return []
     path = DIARY_DIR / f"{day}.jsonl"
     if not path.exists():
         return []
@@ -498,6 +512,8 @@ def recent_diaries(n: int) -> list[tuple[str, str]]:
 
 
 def diary_text(day: str) -> str | None:
+    if not valid_day(day):
+        return None
     path = DIARY_DIR / f"{day}.md"
     return path.read_text(encoding="utf-8").strip() if path.exists() else None
 
@@ -607,6 +623,9 @@ def search_past(query: str = "", date: str = "") -> str:
     if not DIARY_DIR.exists():
         return "Henüz geçmiş kaydım yok."
     if date:
+        date = date.strip()
+        if not valid_day(date):
+            return "Tarihi YYYY-AA-GG biçiminde ver (örn. 2026-11-15)."
         diary = diary_text(date)
         ev = day_events(date)
         talk = "\n".join(f"{'Sahibim' if e['role'] == 'user' else 'Ben'}: {_clip(e['text'], 300)}" for e in ev)
@@ -631,6 +650,13 @@ def search_past(query: str = "", date: str = "") -> str:
 
 
 # ---------------------------------------------------------------- görme
+
+DESCRIBE_FAIL_PREFIXES = ("Fotoğrafı çektim ama anlatamadım", "Görüntüyü anlayacak bir model bağlı değil")
+
+
+def describe_failed(text: str) -> bool:
+    """describe_image gerçek bir açıklama yerine hata metni döndüyse True."""
+    return not text or text.startswith(DESCRIBE_FAIL_PREFIXES)
 
 
 async def describe_image(img: bytes, question: str) -> str:
@@ -838,8 +864,8 @@ async def _think_claude(system, history, user_text, mem, take_photo, send_photo)
     model = CLAUDE_FAST_MODEL if len(user_text) < FAST_MODEL_MAX_CHARS else CLAUDE_MODEL
     messages = history + [{"role": "user", "content": user_text}]
     for _ in range(5):  # en fazla 5 araç turu
-        resp = await claude.messages.create(
-            model=model, max_tokens=1024, system=system, tools=TOOLS, messages=messages)
+        resp = await asyncio.wait_for(claude.messages.create(
+            model=model, max_tokens=1024, system=system, tools=TOOLS, messages=messages), CALL_TIMEOUT)
         if resp.stop_reason != "tool_use":
             return "".join(b.text for b in resp.content if b.type == "text").strip()
         messages.append({"role": "assistant", "content": resp.content})
@@ -886,7 +912,7 @@ async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink, cha
         failures = []
         for name, fn in attempts:
             try:
-                answer = await asyncio.wait_for(fn(), timeout=90)
+                answer = await asyncio.wait_for(fn(), timeout=TOOL_CHAT_TIMEOUT if name == "claude" else CALL_TIMEOUT)
                 if answer:
                     _mark(name, True)
                     if name != "claude":

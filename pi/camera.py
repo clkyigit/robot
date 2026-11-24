@@ -270,7 +270,7 @@ class Camera:
         def grab() -> Optional[bytes]:
             r = subprocess.run(["rpicam-still", "-n", "-t", "2000", "--autofocus-mode", "auto",
                                 "--autofocus-on-capture", "--width", "1536", "--height", "864",
-                                "-o", str(path)], capture_output=True)
+                                "-o", str(path)], capture_output=True, timeout=30)   # takılırsa kilidi sonsuza tutmasın
             return path.read_bytes() if r.returncode == 0 else None
 
         with self._lock:

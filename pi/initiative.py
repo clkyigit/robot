@@ -41,7 +41,7 @@ PRESENCE_EVERY = float(os.environ.get("PRESENCE_EVERY", "60"))
 ARRIVE_AFTER = float(os.environ.get("ARRIVE_AFTER_MIN", "30")) * 60
 MOTION_PIXEL = 25.0   # bir pikselin "değişti" sayılması için gereken parlaklık farkı (0-255)
 MOTION_FRACTION = float(os.environ.get("MOTION_FRACTION", "0.03"))   # görüntünün en az bu oranı değişmeli
-PRESENCE_MAX_TEMP = 72.0     # bundan sıcaksa kamerayı yorma (fan bozuk)
+PRESENCE_MAX_TEMP = 72.0     # bundan sıcaksa kamerayı yorma
 
 Tell = Callable[..., Awaitable[object]]
 
@@ -188,6 +188,10 @@ class Initiative:
             return
         seen = await brain.describe_image(
             img, "Odada ya da masanın başında biri var mı? Varsa ne yapıyor? Kimse yoksa sadece 'kimse yok' de.")
+        if brain.describe_failed(seen):
+            # Görme modeli çalışmadıysa "biri geldi" sanıp hata metnini gördü gibi anlatma
+            log.info("Biri geldi mi bakılamadı: %s", seen[:120])
+            return
         if "kimse yok" in seen.lower()[:40]:
             return
         self.last_seen_someone = time.time()
