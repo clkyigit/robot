@@ -57,6 +57,7 @@ WAKE_MIN_RMS = float(os.environ.get("WAKE_MIN_RMS", "600"))
 
 Utterance = Callable[[bytes], Awaitable[None]]
 Wake = Callable[[], Awaitable[None]]
+LiveStart = Callable[[bytes, list], Awaitable[None]]   # canlı sohbet: uyandırma anının sesi + o arada gelen parçalar
 
 
 I2S_KEYS = ("adau7002", "voicehat", "i2s", "inmp")
@@ -133,17 +134,34 @@ class Ears:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._busy = threading.Event()   # cevap hazırlanırken yeni kelime dinlenmez
+        self._on_live: Optional[LiveStart] = None
+        self._live_ok: Optional[Callable[[], bool]] = None
+        self._stream_cb: Optional[Callable[[bytes, float], None]] = None   # canlı sohbette her parça buraya
+        self._streaming = threading.Event()
 
     # ------------------------------------------------------------ dışarıdan
 
-    def start(self, loop: asyncio.AbstractEventLoop, on_utterance: Utterance, on_wake: Optional[Wake] = None) -> None:
+    def start(self, loop: asyncio.AbstractEventLoop, on_utterance: Utterance, on_wake: Optional[Wake] = None,
+              on_live: Optional[LiveStart] = None, live_ok: Optional[Callable[[], bool]] = None) -> None:
         self._loop, self._on_utterance, self._on_wake = loop, on_utterance, on_wake
+        self._on_live, self._live_ok = on_live, live_ok
         self._thread = threading.Thread(target=self._run, name="ears", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         self._kill()
+
+    def begin_stream(self, cb: Callable[[bytes, float], None]) -> None:
+        """Canlı sohbet başladı: mikrofon parçaları (16 kHz, 16 bit, ses seviyesiyle) cb'ye akar."""
+        self._stream_cb = cb
+        self._streaming.set()
+
+    def end_stream(self) -> None:
+        """Canlı sohbet bitti: yeniden uyandırma kelimesi beklenir."""
+        self._stream_cb = None
+        self._streaming.clear()
+        self._busy.clear()
 
     def set_enabled(self, on: bool) -> None:
         self.enabled = on
@@ -274,6 +292,14 @@ class Ears:
             rms = float(np.sqrt(np.mean(x * x)))
             now = time.time()
 
+            if self._streaming.is_set():     # canlı sohbet: sesi olduğu gibi aktar
+                cb = self._stream_cb
+                if cb:
+                    cb(pcm, rms)
+                rec.Reset()
+                preroll.clear()
+                continue
+
             if self._busy.is_set():          # cevap hazırlanıyor
                 continue
 
@@ -296,6 +322,15 @@ class Ears:
                         continue
                     log.info("Uyandırma kelimesi duyuldu (%s, ses %.0f)", text, peak)
                     rec.Reset()
+                    if self._on_live and self._live_ok and self._live_ok():
+                        self._streaming.set()       # canlı oturum açılana kadar gelen ses de kaybolmasın
+                        pending: list = []
+                        self._stream_cb = lambda pcm, rms: pending.append(pcm)
+                        if self._on_wake:
+                            self._call(self._on_wake())
+                        self._call(self._on_live(b"".join(preroll), pending))
+                        preroll.clear()
+                        continue
                     recording, rec_start, last_loud, spoke = list(preroll), now, now, False
                     if self._on_wake:
                         self._call(self._on_wake())

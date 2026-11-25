@@ -29,6 +29,7 @@ import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
 from ears import ears, has_wake, strip_wake  # noqa: E402
 from voice import voice  # noqa: E402
+from live import live  # noqa: E402
 import body  # noqa: E402
 from initiative import initiative  # noqa: E402
 from gaze import gaze  # noqa: E402
@@ -44,6 +45,7 @@ STARTED = time.time()
 
 TG = None  # Telegram uygulaması (kulakların cevabı sahibine yazabilmesi için)
 EARS_NOTIFY_WAKE = os.environ.get("EARS_NOTIFY_WAKE", "0").strip() == "1"
+LIVE_TELEGRAM = os.environ.get("LIVE_TELEGRAM", "1").strip() != "0"   # canlı sohbeti Telegram'a da yaz
 EARS_VERIFY = os.environ.get("EARS_VERIFY", "1").strip() != "0"   # yazıda da kelime yoksa yanlış alarm say
 _wake_msg = None   # silinebilsin diye son "Dinliyorum" mesajı
 # Sesli konuşmaların son kayıtları (uygulama /api/ears ile görür)
@@ -398,6 +400,17 @@ def build_telegram():
         else:
             await update.message.reply_text(voice_line() + "\nKullanım: /ses ac | /ses kapa | /ses test [metin]")
 
+    async def cmd_canli(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/canli ac | /canli kapa: Gemini Live ile canlı sesli sohbet."""
+        if not await guard(update):
+            return
+        arg = (context.args[0].lower() if context.args else "")
+        if arg in ("ac", "aç", "on", "1"):
+            live.enabled = True
+        elif arg in ("kapa", "kapat", "off", "0"):
+            live.enabled = False
+        await update.message.reply_text(live_line() + "\nKullanım: /canli ac | /canli kapa")
+
     async def cmd_durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
@@ -406,6 +419,7 @@ def build_telegram():
         lines.append(f"📷 Kamera: {'açık' if camera.enabled else 'kapalı (gizlilik)'}")
         lines.append(ears_line())
         lines.append(voice_line())
+        lines.append(live_line())
         lines.append(oto_line())
         lines.append(selfdev_line())
         await update.message.reply_text("\n".join(lines))
@@ -428,12 +442,21 @@ def build_telegram():
     app.add_handler(CommandHandler("kimlik", cmd_kimlik))
     app.add_handler(CommandHandler("sus", cmd_sus))
     app.add_handler(CommandHandler("ses", cmd_ses))
+    app.add_handler(CommandHandler("canli", cmd_canli))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
 
 
 # ================================================================ kulaklar
+
+
+def live_line() -> str:
+    st = live.status()
+    if not live.available():
+        return "💬 Canlı sohbet: kapalı" + (" (Gemini anahtarı yok)" if st["enabled"] else " (/canli ac)")
+    return (f"💬 Canlı sohbet: {'şu an konuşuyor' if st['active'] else 'hazır'} ({st['model']}, ses {st['voice']})"
+            + (f", son hata: {st['error']}" if st["error"] else ""))
 
 
 def voice_line() -> str:
@@ -541,6 +564,39 @@ async def on_heard(wav: bytes) -> None:
     await voice.say(reply)
 
 
+async def on_live(preroll: bytes, pending: list) -> None:
+    """Uyandırma kelimesi duyuldu: canlı sesli sohbet (Gemini Live). Açılamazsa eski yönteme düşer."""
+    brain.set_face("mutlu", 3)
+    ok = await live.run(preroll, ears, pending)
+    if not ok:
+        log.warning("Canlı sohbet açılamadı, eski yönteme geçiyorum: %s", live.error)
+        audio = preroll + b"".join(pending)
+        if audio:
+            ears._busy.set()
+            try:
+                await on_heard(ears._wav(audio))
+            finally:
+                ears._busy.clear()
+
+
+async def on_live_turn(heard: str, said: str) -> None:
+    """Canlı sohbetin her soru-cevabı: hafızaya, günün kaydına ve (isteğe bağlı) Telegram'a."""
+    if heard:
+        ears.heard(heard)
+    mem = brain.load_memory()
+    mem["history"] += [{"role": "user", "content": heard or "(anlaşılmadı)"},
+                       {"role": "assistant", "content": said or "(sesli cevap)"}]
+    brain.save_memory(mem)
+    with contextlib.suppress(OSError):
+        brain.log_event("user", heard, "ses")
+        brain.log_event("assistant", said, "ses")
+    record_event("ses", said, heard=heard, photo_ids=[])
+    VOICE_LOG.append({"at": time.time(), "heard": heard, "reply": said, "photos": []})
+    del VOICE_LOG[:-20]
+    if LIVE_TELEGRAM:
+        await tell_owner(f"🎤 {heard or '…'}\n\n🤖 {said or '…'}", record=False)
+
+
 # ================================================================ arka plan: günlük ve beden takibi
 
 
@@ -601,7 +657,8 @@ async def lifespan(_app: FastAPI):
         await tg.updater.start_polling()
     watcher = asyncio.create_task(camera.idle_watcher())
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
-    ears.start(asyncio.get_running_loop(), on_heard, on_wake)
+    live.on_turn = on_live_turn
+    ears.start(asyncio.get_running_loop(), on_heard, on_wake, on_live, live.available)
     bg = [asyncio.create_task(diary_loop()), asyncio.create_task(body_watch())]
 
     async def keep_photo(img: bytes) -> None:
@@ -692,6 +749,7 @@ async def status():
         "camera": {"enabled": camera.enabled, "active": camera.active},
         "ears": ears.status(),
         "voice": voice.status(),
+        "live": live.status(),
         "initiative": initiative.status(),
         "selfdev": selfdev.status(),
     }
