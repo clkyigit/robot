@@ -28,6 +28,7 @@ log = logging.getLogger("robot")
 import brain  # noqa: E402  (logging ayarından sonra)
 from camera import camera  # noqa: E402
 from ears import ears, has_wake, strip_wake  # noqa: E402
+from voice import voice  # noqa: E402
 import body  # noqa: E402
 from initiative import initiative  # noqa: E402
 from gaze import gaze  # noqa: E402
@@ -375,6 +376,28 @@ def build_telegram():
             ears.set_enabled(False)
             await update.message.reply_text("🙉 Kulaklarımı kapattım. Açmak için /dinle")
 
+    async def cmd_ses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/ses ac | /ses kapa | /ses test [metin]: hoparlörden sesli cevap."""
+        if not await guard(update):
+            return
+        arg = (context.args[0].lower() if context.args else "")
+        if arg in ("ac", "aç", "on", "1"):
+            voice.set_enabled(True)
+            await update.message.reply_text("🔊 Sesli cevap açık.")
+        elif arg in ("kapa", "kapat", "off", "0"):
+            voice.set_enabled(False)
+            await update.message.reply_text("🔇 Sesli cevap kapalı. Açmak için /ses ac")
+        elif arg == "test":
+            text = " ".join(context.args[1:]) or "Merhaba, sesim geliyor mu?"
+            was = voice.enabled
+            voice.set_enabled(True)
+            ok = await voice.say(text)
+            voice.set_enabled(was)
+            st = voice.status()
+            await update.message.reply_text(f"🔊 Okudum ({st['engine']})." if ok else f"Okuyamadım: {st['error']}")
+        else:
+            await update.message.reply_text(voice_line() + "\nKullanım: /ses ac | /ses kapa | /ses test [metin]")
+
     async def cmd_durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
@@ -382,6 +405,7 @@ def build_telegram():
         lines.append("📟 " + body.live_report())   # anlık ölçüm: birim ve zamanla
         lines.append(f"📷 Kamera: {'açık' if camera.enabled else 'kapalı (gizlilik)'}")
         lines.append(ears_line())
+        lines.append(voice_line())
         lines.append(oto_line())
         lines.append(selfdev_line())
         await update.message.reply_text("\n".join(lines))
@@ -403,12 +427,20 @@ def build_telegram():
     app.add_handler(CommandHandler("gunluk", cmd_gunluk))
     app.add_handler(CommandHandler("kimlik", cmd_kimlik))
     app.add_handler(CommandHandler("sus", cmd_sus))
+    app.add_handler(CommandHandler("ses", cmd_ses))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
 
 
 # ================================================================ kulaklar
+
+
+def voice_line() -> str:
+    st = voice.status()
+    if not st["enabled"]:
+        return "🔇 Ses: kapalı (/ses ac)"
+    return f"🔊 Ses: açık ({st['engine'] or 'henüz konuşmadı'})" + (f", son hata: {st['error']}" if st["error"] else "")
 
 
 def ears_line() -> str:
@@ -489,6 +521,7 @@ async def on_heard(wav: bytes) -> None:
     text = strip_wake(raw)
     if not text:
         await tell_owner("🎤 Efendim? Seslendin ama devamını anlayamadım.", kind="uyari")
+        await voice.say("Efendim?")
         return
     ears.heard(text)
     log.info("Sesli: %s", text)
@@ -504,6 +537,8 @@ async def on_heard(wav: bytes) -> None:
                       "photos": [f"/api/photos/{p}" for p in photo_ids]})
     del VOICE_LOG[:-20]
     await tell_owner(f"🎤 {text}\n\n🤖 {reply}", record=False)
+    # Sesli soruya sesli cevap. Bu sırada kulaklar meşgul sayılır, kendi sesini duymaz.
+    await voice.say(reply)
 
 
 # ================================================================ arka plan: günlük ve beden takibi
@@ -656,6 +691,7 @@ async def status():
         "uptime_s": int(time.time() - STARTED),
         "camera": {"enabled": camera.enabled, "active": camera.active},
         "ears": ears.status(),
+        "voice": voice.status(),
         "initiative": initiative.status(),
         "selfdev": selfdev.status(),
     }

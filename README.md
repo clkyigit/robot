@@ -82,7 +82,7 @@ Bir kez: `bash pi/kulak_kurulum.sh` (Vosk ve Türkçe ses modelini kurar).
 Robot uyandırma kelimesini (varsayılan **robot**) internetsiz algılar, sonraki cümleyi kaydedip
 yazıya çevirir (OpenAI, olmazsa Gemini), cevabı Telegram'a yazar. Telegram'da `/dinle` ve `/sus`.
 
-İsteğe bağlı ayarlar: `WAKE_WORDS`, `EARS=0`, `MIC_DEVICE`, `MIC_GAIN`, `EARS_NOTIFY_WAKE=0`,
+İsteğe bağlı ayarlar: `WAKE_WORDS`, `EARS=0`, `MIC_DEVICE`, `MIC_KIND`, `MIC_GAIN`, `TTS=0`, `TTS_VOICE`, `SPEAKER_DEVICE`, `EARS_NOTIFY_WAKE=0`,
 `OPENAI_STT_MODELS`, `WAKE_LOUDNESS` (3), `WAKE_MIN_RMS` (600; robot uyanmıyorsa düşür), `EARS_VERIFY=0`. Not: robot dinlerken mikrofon meşguldür; `arecord` testi için önce `/sus`.
 
 ## Bilinç: kendini bilme ve günlük

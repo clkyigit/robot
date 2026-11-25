@@ -1,15 +1,16 @@
 """Robotun kulakları.
 
-Mikrofonu (INMP441, I2S) sürekli dinler. Uyandırma kelimesini internetsiz olarak (Vosk, Türkçe küçük model)
+Mikrofonu (USB mikrofon ya da INMP441 I2S) sürekli dinler. Uyandırma kelimesini internetsiz olarak (Vosk, Türkçe küçük model)
 yakalar, ardından söylediğin cümleyi sessizlik gelene kadar kaydeder ve WAV olarak geri çağırma
 fonksiyonuna verir. Yazıya çevirme ve cevap beyinde (brain.transcribe / brain.chat) yapılır.
 
 Ayarlar (.env):
   EARS=1                     0 yaparsan kulaklar kapalı başlar
   WAKE_WORDS=robot           virgülle birden fazla kelime yazılabilir (Vosk sözlüğünde olmalı)
-  MIC_DEVICE=auto            ya da plughw:2,0 gibi
-  MIC_GAIN=4                 ses yükseltme
-  MIC_CHANNEL=0              L/R pini GND'de ise 0 (sol)
+  MIC_DEVICE=auto            önce USB mikrofonu, yoksa I2S mikrofonu bulur; ya da plughw:CARD=Mini,DEV=0 gibi
+  MIC_KIND=auto              usb | i2s (MIC_DEVICE elle yazılırsa hangisi olduğu)
+  MIC_GAIN=                  ses yükseltme (boşsa USB'de 1, I2S'te 4)
+  MIC_CHANNEL=0              I2S'te L/R pini GND'de ise 0 (sol)
   VOSK_MODEL=models/vosk-model-small-tr-0.3
 """
 
@@ -38,7 +39,8 @@ CHUNK_FRAMES = int(RATE_IN * CHUNK_S)
 
 WAKE_WORDS = [w.strip().lower() for w in os.environ.get("WAKE_WORDS", "robot").split(",") if w.strip()]
 MIC_DEVICE = os.environ.get("MIC_DEVICE", "auto").strip()
-MIC_GAIN = float(os.environ.get("MIC_GAIN", "4"))
+MIC_KIND = os.environ.get("MIC_KIND", "auto").strip().lower()
+_GAIN_ENV = os.environ.get("MIC_GAIN", "").strip()
 MIC_CHANNEL = int(os.environ.get("MIC_CHANNEL", "0"))
 VOSK_MODEL = pathlib.Path(os.environ.get("VOSK_MODEL", "models/vosk-model-small-tr-0.3"))
 if not VOSK_MODEL.is_absolute():
@@ -57,19 +59,31 @@ Utterance = Callable[[bytes], Awaitable[None]]
 Wake = Callable[[], Awaitable[None]]
 
 
-def find_device() -> str:
-    """'auto' ise arecord -l çıktısında I2S mikrofon kartını bulur."""
+I2S_KEYS = ("adau7002", "voicehat", "i2s", "inmp")
+
+
+def find_device() -> tuple[str, str]:
+    """(cihaz, tür). 'auto' ise arecord -l çıktısında önce USB mikrofonu, yoksa I2S mikrofonu bulur.
+    USB kartı numarayla değil adıyla seçilir; yeniden başlatınca numara değişse de doğru kart açılır."""
     if MIC_DEVICE != "auto":
-        return MIC_DEVICE
+        kind = MIC_KIND if MIC_KIND in ("usb", "i2s") else (
+            "i2s" if any(k in MIC_DEVICE.lower() for k in I2S_KEYS) else "usb")
+        return MIC_DEVICE, kind
     try:
         out = subprocess.run(["arecord", "-l"], capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.TimeoutExpired):
         out = ""
+    i2s = ""
     for line in out.splitlines():
-        m = re.match(r"card (\d+):", line)
-        if m and any(k in line.lower() for k in ("adau7002", "voicehat", "i2s", "inmp")):
-            return f"plughw:{m.group(1)},0"
-    return "plughw:2,0"
+        m = re.match(r"card (\d+): (\S+) \[", line)
+        if not m:
+            continue
+        low = line.lower()
+        if "usb" in low:
+            return f"plughw:CARD={m.group(2)},DEV=0", "usb"
+        if not i2s and any(k in low for k in I2S_KEYS):
+            i2s = f"plughw:{m.group(1)},0"
+    return (i2s, "i2s") if i2s else ("default", "usb")
 
 
 def known_word(model, model_dir: pathlib.Path, word: str) -> bool | None:
@@ -108,6 +122,7 @@ class Ears:
         self.running = False
         self.error = ""
         self.device = ""
+        self.kind = ""
         self.last_text = ""
         self.last_at = 0.0
         self.missing_words: list[str] = []
@@ -138,7 +153,7 @@ class Ears:
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "running": self.running, "error": self.error,
-                "device": self.device, "wake_words": WAKE_WORDS, "missing_words": self.missing_words,
+                "device": self.device, "kind": self.kind, "wake_words": WAKE_WORDS, "missing_words": self.missing_words,
                 "last_text": self.last_text, "last_at": self.last_at}
 
     def heard(self, text: str) -> None:
@@ -205,7 +220,7 @@ class Ears:
                 self.running = False
                 time.sleep(0.5)
                 continue
-            self.device = find_device()
+            self.device, self.kind = find_device()
             try:
                 self._listen(KaldiRecognizer(model, RATE, grammar), known)
             except Exception as e:  # noqa: BLE001
@@ -219,9 +234,15 @@ class Ears:
     def _listen(self, rec, known: list[str]) -> None:
         import numpy as np
 
-        cmd = ["arecord", "-q", "-D", self.device, "-c", "2", "-r", str(RATE_IN), "-f", "S32_LE", "-t", "raw"]
+        usb = self.kind == "usb"
+        gain = float(_GAIN_ENV) if _GAIN_ENV else (1.0 if usb else 4.0)
+        if usb:   # USB mikrofon: 16 bit tek kanal (plughw dönüştürür)
+            cmd = ["arecord", "-q", "-D", self.device, "-c", "1", "-r", str(RATE_IN), "-f", "S16_LE", "-t", "raw"]
+            nbytes = CHUNK_FRAMES * 2
+        else:     # INMP441: 32 bit iki kanal, biri boş
+            cmd = ["arecord", "-q", "-D", self.device, "-c", "2", "-r", str(RATE_IN), "-f", "S32_LE", "-t", "raw"]
+            nbytes = CHUNK_FRAMES * 2 * 4
         self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        nbytes = CHUNK_FRAMES * 2 * 4
         dc: Optional[float] = None
         noise = 200.0
         preroll: collections.deque = collections.deque(maxlen=int(PREROLL_S / CHUNK_S))
@@ -231,7 +252,7 @@ class Ears:
         spoke = False
         skip = int(0.5 / CHUNK_S)   # açılıştaki "pıt" sesini atla
         self.running, self.error = True, ""
-        log.info("Mikrofon dinleniyor (%s)", self.device)
+        log.info("Mikrofon dinleniyor (%s, %s, kazanç %.1f)", self.device, self.kind, gain)
 
         while self.enabled and not self._stop.is_set():
             buf = self._proc.stdout.read(nbytes)
@@ -242,10 +263,13 @@ class Ears:
                 skip -= 1
                 continue
 
-            x = np.frombuffer(buf, dtype="<i4").reshape(-1, 2)[:, MIC_CHANNEL].astype(np.float32) / 65536.0
+            if usb:
+                x = np.frombuffer(buf, dtype="<i2").astype(np.float32)
+            else:
+                x = np.frombuffer(buf, dtype="<i4").reshape(-1, 2)[:, MIC_CHANNEL].astype(np.float32) / 65536.0
             m = float(x.mean())
             dc = m if dc is None else 0.9 * dc + 0.1 * m      # sabit kaymayı (DC) temizle
-            x = (x - dc).reshape(-1, DECIM).mean(axis=1) * MIC_GAIN   # 48 kHz -> 16 kHz
+            x = (x - dc).reshape(-1, DECIM).mean(axis=1) * gain   # 48 kHz -> 16 kHz
             pcm = np.clip(x, -32767, 32767).astype("<i2").tobytes()
             rms = float(np.sqrt(np.mean(x * x)))
             now = time.time()
