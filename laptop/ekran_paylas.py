@@ -122,7 +122,12 @@ class App:
         url = simpledialog.askstring("Robot adresi", "Robotun adresi (ör. http://192.168.1.190:8080):",
                                      initialvalue=self.cfg.get("url", ""), parent=self.root)
         if url:
-            self.cfg["url"] = url.strip().rstrip("/")
+            url = url.strip().rstrip("/")
+            if not url.startswith("http"):
+                url = "http://" + url
+            if url.count(":") < 2:
+                url += f":{PORT}"
+            self.cfg["url"] = url
             save_cfg(self.cfg)
 
     def repair(self) -> None:
@@ -181,6 +186,9 @@ class App:
                 self.cfg["url"], fails = url, 0
                 save_cfg(self.cfg)
             if not self.cfg.get("token"):
+                if not is_robot(self.cfg["url"], 3):
+                    fails = 3          # kayıtlı adres eski/yanlış: robotu yeniden ara
+                    continue
                 if not self.pair():
                     time.sleep(3)
                 continue
