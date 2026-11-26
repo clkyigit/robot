@@ -435,6 +435,22 @@ def build_telegram():
             live.enabled = False
         await update.message.reply_text(live_line() + "\nKullanım: /canli ac | /canli kapa")
 
+    async def cmd_ekran(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/ekran [soru]: laptop ekranına (onayla) bakar. Claude kredisi olmasa da çalışır."""
+        if not await guard(update):
+            return
+        age = time.time() - SCREEN["seen"]
+        if age > 15:
+            await update.message.reply_text(
+                "💻 Laptoptaki ekran programı bana bağlı değil" +
+                (f" (son bağlantı {int(age)} sn önce)." if SCREEN["seen"] else " (hiç bağlanmadı).") +
+                " Programı açıp robot adresini doğru girdiğinden emin ol.")
+            return
+        question = " ".join(context.args) or "Ekranda ne var? Kısaca anlat."
+        await update.message.reply_text("💻 Bağlantı var. Laptopta onay penceresi açıyorum, izin ver...")
+        await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+        await reply_long(update, await screen_look(question))
+
     async def cmd_durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
@@ -467,6 +483,7 @@ def build_telegram():
     app.add_handler(CommandHandler("sus", cmd_sus))
     app.add_handler(CommandHandler("ses", cmd_ses))
     app.add_handler(CommandHandler("canli", cmd_canli))
+    app.add_handler(CommandHandler("ekran", cmd_ekran))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
