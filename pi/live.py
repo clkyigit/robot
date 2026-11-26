@@ -47,6 +47,8 @@ ECHO_TAIL_S = 0.35
 CAMERA_ON = os.environ.get("LIVE_CAMERA", "1").strip() != "0"
 CAMERA_FPS = float(os.environ.get("LIVE_CAMERA_FPS", "1"))
 CAMERA_SIDE = 768
+SCREEN_SIDE = 1536               # ekran görüntüsü: yazılar okunabilsin
+SCREEN_EVERY_S = 3.0
 SEARCH_ON = os.environ.get("LIVE_SEARCH", "1").strip() != "0"                # Gemini Live için önerilen görüntü boyu               # hoparlör sustuktan sonra mikrofonu bu kadar daha kapalı tut
 
 Turn = Callable[[str, str], Awaitable[None]]
@@ -56,6 +58,7 @@ VOICE_RULES = (
     "genelde bir-üç cümle yeter; liste, madde işareti, emoji ve bağlantı kullanma. Türkçe konuş. "
     "Güncel bir bilgi gerekirse (haber, hava durumu, döviz, maç, bir yerin çalışma saati, yeni bir gelişme) "
     "Google araması yap; hafızandan tahmin etme, bulduğunu kısaca ve kaynağını belirterek söyle. "
+    "Sahibin laptop ekranına bakmanı isterse ekrana_bak aracını kullan. "
     "Bu sesli sohbette diğer araçların (fotoğraf çekme, geçmişe bakma, kod geliştirme) yok; bunlar gerekiyorsa "
     "sahibine Telegram'dan yazmasını söyle. Sahibin konuşmayı bitirmek isterse kısaca vedalaş."
 )
@@ -64,14 +67,16 @@ CAMERA_RULES = (
     "masa). Sorulursa ya da gerçekten önemliyse gördüğünü söyle; gördüğün her şeyi sürekli anlatma. Emin "
     "olmadığın şeyi görmüş gibi söyleme."
 )
+# Not: ekran görüntüsü de kamera gibi görüntü akışından gelir; ekran akarken kamera karesi gönderilmez.
 
 
-def small_jpeg(jpeg: bytes) -> bytes:
-    """Kamera karesini Gemini Live için küçültür (en uzun kenar 768)."""
+def small_jpeg(jpeg: bytes, side: int = 0) -> bytes:
+    """Kareyi Gemini Live için küçültür (kamera 768, ekran yazıları okunsun diye daha büyük)."""
+    side = side or CAMERA_SIDE
     import io
     from PIL import Image
     im = Image.open(io.BytesIO(jpeg))
-    im.thumbnail((CAMERA_SIDE, CAMERA_SIDE))
+    im.thumbnail((side, side))
     out = io.BytesIO()
     im.convert("RGB").save(out, "JPEG", quality=70)
     return out.getvalue()
@@ -126,6 +131,7 @@ class Live:
         self.turns = 0
         self.on_turn: Optional[Turn] = None
         self.camera = None            # robot.py verir
+        self.screen_grab = None       # robot.py verir: laptop ekranı (onaylı)
         self.camera_frames = 0
         self.search = False
 
@@ -145,12 +151,28 @@ class Live:
             "system_instruction": system + "\n\n" + VOICE_RULES + ("\n\n" + CAMERA_RULES if self._camera_ok() else ""),
             # uzun sohbet: eski kısmı özetleyerek sürdür (görüntülü oturumlar aksi halde ~2 dk ile sınırlı)
             "context_window_compression": {"sliding_window": {}},
-            **({"tools": [{"google_search": {}}]} if SEARCH_ON and search else {}),
+            "tools": self._tools(search),
             "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
             "input_audio_transcription": {},
             "output_audio_transcription": {},
             "realtime_input_config": {"automatic_activity_detection": {"silence_duration_ms": 700}},
         }
+
+    def _tools(self, search: bool) -> list:
+        tools = []
+        if SEARCH_ON and search:
+            tools.append({"google_search": {}})
+        if self.screen_grab:
+            tools.append({"function_declarations": [{
+                "name": "ekrana_bak",
+                "description": "Sahibinin laptop ekranını görmek için. Sahibin 'ekranıma bak', 'ekranda ne var', "
+                               "'şu tabloyu oku' gibi bir şey dediğinde kullan. Laptopta onay penceresi çıkar; "
+                               "izin verirse ekran görüntüsü görüntü akışına eklenir ve onu görürsün. Sahibin "
+                               "'5 dk izin ver' derse ekran birkaç saniyede bir güncellenir.",
+                "parameters": {"type": "object", "properties": {
+                    "neden": {"type": "string", "description": "Ekranda neye bakacağın (onay penceresinde görünür)"}}},
+            }]})
+        return tools
 
     def _camera_ok(self) -> bool:
         return CAMERA_ON and self.camera is not None and getattr(self.camera, "enabled", False)
@@ -199,7 +221,52 @@ class Live:
 
     async def _converse(self, session, queue: asyncio.Queue, preroll: bytes, player: Player) -> None:
         from google.genai import types
-        state = {"last_user": time.time(), "last_model": 0.0, "heard": "", "said": "", "busy": False}
+        state = {"last_user": time.time(), "last_model": 0.0, "heard": "", "said": "", "busy": False,
+                 "tool": 0, "screen_until": 0.0}
+        bg: set = set()
+
+        async def send_screen(img: bytes) -> None:
+            data = await asyncio.to_thread(small_jpeg, img, SCREEN_SIDE)
+            await session.send_realtime_input(video=types.Blob(data=data, mime_type="image/jpeg"))
+
+        async def screen_stream() -> None:
+            """İzin süresi boyunca ekranı birkaç saniyede bir yeniler (laptop bu sürede sormadan verir)."""
+            while time.time() < state["screen_until"]:
+                await asyncio.sleep(SCREEN_EVERY_S)
+                img, _err, left = await self.screen_grab("Sesli sohbette ekranı izliyorum", wait=10)
+                if img is None:
+                    break
+                await send_screen(img)
+                state["screen_until"] = time.time() + left
+            state["screen_until"] = 0.0
+
+        async def on_tool(fc) -> None:
+            state["tool"] += 1
+            try:
+                if fc.name != "ekrana_bak":
+                    result = f"Bilinmeyen araç: {fc.name}"
+                else:
+                    reason = (fc.args or {}).get("neden") or "Sesli sohbette ekranına bakmak istiyorum"
+                    img, err, left = await self.screen_grab(reason, wait=40)
+                    if img is None:
+                        result = err
+                    else:
+                        await send_screen(img)
+                        result = ("Ekran görüntüsü görüntü akışına eklendi, şimdi ekranı görüyorsun; sahibinin "
+                                  "sorusunu ona göre cevapla. Hasta adı/TC gibi kişisel bilgileri yüksek sesle okuma.")
+                        if left > 0:
+                            state["screen_until"] = time.time() + left
+                            result += f" Ekran {int(left // 60)} dakika boyunca birkaç saniyede bir güncellenecek."
+                            t = asyncio.create_task(screen_stream())
+                            bg.add(t)
+                            t.add_done_callback(bg.discard)
+                await session.send_tool_response(function_responses=[
+                    types.FunctionResponse(id=fc.id, name=fc.name, response={"sonuc": result})])
+            except Exception as e:  # noqa: BLE001
+                log.warning("Ekran aracı hata verdi: %s", e)
+            finally:
+                state["tool"] -= 1
+                state["last_model"] = time.time()
 
         async def send() -> None:
             # Uyandırma kelimesiyle aynı nefeste söylenen cümle kaybolmasın: önce kelimenin öncesi/sonrası
@@ -223,6 +290,11 @@ class Live:
         async def receive() -> None:
             while True:
                 async for resp in session.receive():
+                    if getattr(resp, "tool_call", None) and resp.tool_call.function_calls:
+                        for fc in resp.tool_call.function_calls:
+                            t = asyncio.create_task(on_tool(fc))
+                            bg.add(t)
+                            t.add_done_callback(bg.discard)
                     if resp.data:
                         state["busy"] = True
                         state["last_model"] = time.time()
@@ -254,7 +326,7 @@ class Live:
                 await asyncio.Event().wait()
             while True:
                 try:
-                    if self._camera_ok():
+                    if self._camera_ok() and time.time() > state["screen_until"]:   # ekran akarken kamera bekler
                         jpg = await self.camera.frame()
                         if jpg:
                             await session.send_realtime_input(
@@ -273,7 +345,8 @@ class Live:
                     log.info("Canlı sohbet süre sınırına geldi")
                     return
                 quiet_since = max(state["last_user"], player.until, state["last_model"])
-                if not state["busy"] and not player.playing() and now - quiet_since > IDLE_S:
+                if (not state["busy"] and not state["tool"] and not player.playing()
+                        and now - quiet_since > IDLE_S and now > state["screen_until"]):
                     return
 
         tasks = [asyncio.create_task(t()) for t in (send, receive, watchdog, watch)]
@@ -283,9 +356,9 @@ class Live:
                 if t.exception():
                     raise t.exception()
         finally:
-            for t in tasks:
+            for t in tasks + list(bg):
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, *bg, return_exceptions=True)
 
     async def _safe_turn(self, heard: str, said: str) -> None:
         try:

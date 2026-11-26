@@ -222,6 +222,7 @@ class App:
                 body = {"id": req["id"], "approved": bool(answer.get("ok"))}
                 if answer.get("minutes"):
                     self.allow_until = time.time() + WINDOW_MINUTES * 60
+                body["window"] = max(0.0, self.allow_until - time.time())   # robot ekranı bu süre izleyebilir
                 if body["approved"]:
                     try:
                         body["image"] = self.grab()

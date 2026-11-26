@@ -114,28 +114,36 @@ brain.SELF_IMPROVE = lambda goal, reason="": selfdev.request(goal, reason)
 SCREEN: dict = {"req": None, "future": None, "seen": 0.0}
 
 
-async def screen_look(question: str) -> str:
+async def screen_capture(question: str, wait: float = 45) -> tuple[bytes | None, str, float]:
+    """Laptoptan (onaylı) ekran görüntüsü ister. (görüntü, hata, kalan izin süresi sn)."""
     if time.time() - SCREEN["seen"] > 15:
-        return "Laptoptaki ekran paylaşım programı (RobotEkran) açık değil ya da bana bağlanmıyor."
+        return None, "Laptoptaki ekran paylaşım programı (RobotEkran) açık değil ya da bana bağlanmıyor.", 0.0
     if SCREEN["req"] is not None:
-        return "Laptopta zaten bekleyen bir onay isteğim var."
+        return None, "Laptopta zaten bekleyen bir onay isteğim var.", 0.0
     fut = asyncio.get_running_loop().create_future()
     SCREEN["req"] = {"id": uuid.uuid4().hex[:10], "reason": question[:300]}
     SCREEN["future"] = fut
     try:
-        res = await asyncio.wait_for(fut, timeout=45)
+        res = await asyncio.wait_for(fut, timeout=wait)
     except asyncio.TimeoutError:
-        return "Laptopta onay penceresine cevap gelmedi."
+        return None, "Laptopta onay penceresine cevap gelmedi.", 0.0
     finally:
         SCREEN["req"], SCREEN["future"] = None, None
     if not res.get("approved"):
-        return res.get("error") or "Sahibim ekranına bakmama izin vermedi; buna saygı göster."
+        return None, res.get("error") or "Sahibim ekranına bakmama izin vermedi; buna saygı göster.", 0.0
     import base64
     import binascii
     try:
         img = base64.b64decode(res.get("image", ""), validate=True)
     except (binascii.Error, ValueError):
-        return "Ekran görüntüsü bozuk geldi."
+        return None, "Ekran görüntüsü bozuk geldi.", 0.0
+    return img, "", float(res.get("window") or 0)
+
+
+async def screen_look(question: str) -> str:
+    img, err, _ = await screen_capture(question)
+    if img is None:
+        return err
     brain.set_face("merakli", 6)
     return "Laptop ekranına baktın. Gördüğün: " + await brain.describe_image(
         img, f"Bu, sahibimin bilgisayar ekranının görüntüsü. {question} "
@@ -520,7 +528,7 @@ def live_line() -> str:
     if not live.available():
         return "💬 Canlı sohbet: kapalı" + (" (Gemini anahtarı yok)" if st["enabled"] else " (/canli ac)")
     return (f"💬 Canlı sohbet: {'şu an konuşuyor' if st['active'] else 'hazır'} ({st['model']}, ses {st['voice']}, "
-            f"kamera {'açık' if st['camera'] else 'kapalı'})"
+            f"kamera {'açık' if st['camera'] else 'kapalı'}, arama {'açık' if st['search'] else 'kapalı'})"
             + (f", son hata: {st['error']}" if st["error"] else ""))
 
 
@@ -752,6 +760,7 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
     live.on_turn = on_live_turn
     live.camera = camera
+    live.screen_grab = screen_capture
     ears.start(asyncio.get_running_loop(), on_heard, on_wake, on_live, live.available)
     bg = [asyncio.create_task(diary_loop()), asyncio.create_task(body_watch())]
 
@@ -813,6 +822,7 @@ class ScreenAnswerIn(BaseModel):
     approved: bool
     image: str = ""
     error: str = ""
+    window: float = 0.0     # laptopta "5 dk izin ver" seçildiyse kalan saniye
 
 
 class SelfDevIn(BaseModel):
