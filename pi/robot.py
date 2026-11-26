@@ -183,8 +183,7 @@ def build_telegram():
         # "sesli oku", "oku", "tekrar söyle" gibi kısa istek: bir önceki cevabımı hoparlörden oku
         if _READ_LAST.match(text or "") and LAST_REPLY:
             await update.message.reply_text("🔊 Okuyorum.")
-            if not await voice.say(LAST_REPLY):
-                await update.message.reply_text(f"Okuyamadım: {voice.status()['error'] or 'ses kapalı (/ses ac)'}")
+            speak_later(update, LAST_REPLY)
             return
         # "ekranıma bak", "ekranımda ne var" gibi istek: hangi model olursa olsun doğrudan laptopa sor
         if _SCREEN_ASK.search(text or ""):
@@ -193,7 +192,7 @@ def build_telegram():
             LAST_REPLY = await screen_look(text)
             await reply_long(update, LAST_REPLY)
             if VOICE_ALWAYS:
-                await voice.say(LAST_REPLY)
+                speak_later(update, LAST_REPLY)
             return
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
 
@@ -206,8 +205,7 @@ def build_telegram():
         await reply_long(update, reply)
         # "sesli söyle" istendi ama cevap araçsız bir modelden geldiyse (ör. Claude kredisi bitti) yine de oku
         if (VOICE_ALWAYS or wants_voice(text)) and brain.SPOKE_COUNT == spoke_before:
-            if not await voice.say(reply) and voice.enabled:
-                await update.message.reply_text(f"🔇 Sesli okuyamadım: {voice.status()['error'] or 'bilinmeyen hata'}")
+            speak_later(update, reply)
 
     async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
@@ -487,7 +485,9 @@ def build_telegram():
         await update.message.reply_text("\n".join(lines))
 
     app = (Application.builder().token(TELEGRAM_TOKEN)
-           .connect_timeout(30).read_timeout(30).write_timeout(60).build())
+           .connect_timeout(30).read_timeout(30).write_timeout(60)
+           .concurrent_updates(4)      # uzun süren bir iş (ses, ekran onayı) diğer mesajları bekletmesin
+           .build())
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("foto", cmd_foto))
     app.add_handler(CommandHandler("bakis", cmd_bakis))
@@ -530,6 +530,20 @@ _READ_LAST = re.compile(r"^\W*(sesli\s+)?(oku|okur musun|söyle|tekrar\s+(et|oku
 LAST_REPLY = ""
 _SCREEN_ASK = re.compile(r"(ekran(ım|ıma|ımda|ımdaki|a|da)?\b.*\b(bak|gör|ne var|oku))|laptop(um|uma|umda)?\b.*\bbak",
                          re.IGNORECASE)
+
+
+def speak_later(update, text: str) -> None:
+    """Cevabı arka planda seslendirir; Telegram beklemez. Olmazsa nedenini yazar."""
+    async def run():
+        if not await voice.say(text) and voice.enabled:
+            with contextlib.suppress(Exception):
+                await update.message.reply_text(f"🔇 Sesli okuyamadım: {voice.status()['error'] or 'bilinmeyen hata'}")
+    task = asyncio.create_task(run())
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
+_BG_TASKS: set = set()
 
 
 def wants_voice(text: str) -> bool:
