@@ -786,6 +786,15 @@ TOOLS = [
             "required": ["soru"]},
     },
     {
+        "name": "sesli_soyle",
+        "description": "Hoparlöründen sesli konuşur (USB hoparlör). Sahibin Telegram'dan 'sesli söyle', 'sesli oku', "
+                       "'konuş' gibi bir şey isterse ya da bir şeyi duyurman gerekirse kullan. Okunacak metni kısa ve "
+                       "doğal yaz; emoji, liste ve bağlantı koyma.",
+        "input_schema": {"type": "object", "properties": {
+            "metin": {"type": "string", "description": "Sesli okunacak metin"}},
+            "required": ["metin"]},
+    },
+    {
         "name": "hatirla",
         "description": "Sahibin hakkında ya da kendin hakkında kalıcı olarak hatırlaman gereken önemli bir bilgiyi kaydeder "
                        "(isim, tercih, karar, proje gibi). Geçici sohbet ayrıntılarını kaydetme.",
@@ -827,6 +836,12 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
             return "Kamera çalışmadı."
         await send_photo(img)
         return await describe_image(img, args.get("soru", "Ne görüyorsun?"))
+    if name == "sesli_soyle":
+        from voice import voice
+        if not voice.enabled:
+            return "Sesli cevap kapalı (sahibin /ses ac ile açabilir)."
+        ok = await voice.say(str(args.get("metin", "")))
+        return "Hoparlörden sesli söyledim." if ok else f"Sesli söyleyemedim: {voice.status()['error']}"
     if name == "hatirla":
         bilgi = args.get("bilgi", "").strip()
         if bilgi and bilgi not in mem["facts"]:
