@@ -71,6 +71,8 @@ if OPENAI_KEY:
     import openai
     openai_client = openai.AsyncOpenAI(api_key=OPENAI_KEY)
 
+SPOKE_COUNT = 0   # sesli_soyle aracı kaç kez kullanıldı (robot.py yedek seslendirme için bakar)
+
 # Robotun anlık beden/durum bilgisini veren fonksiyon (robot.py ayarlar)
 STATE_PROVIDER: Optional[Callable[[], str]] = None
 # Kendi kodunu geliştirme isteğini başlatan fonksiyon (robot.py ayarlar: selfdev.request)
@@ -840,6 +842,8 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
         from voice import voice
         if not voice.enabled:
             return "Sesli cevap kapalı (sahibin /ses ac ile açabilir)."
+        global SPOKE_COUNT
+        SPOKE_COUNT += 1
         ok = await voice.say(str(args.get("metin", "")))
         return "Hoparlörden sesli söyledim." if ok else f"Sesli söyleyemedim: {voice.status()['error']}"
     if name == "hatirla":

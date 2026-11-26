@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import secrets
 import time
 import uuid
@@ -182,8 +183,12 @@ def build_telegram():
         async def send_photo(img: bytes) -> None:
             await update.message.reply_photo(img)
 
+        spoke_before = brain.SPOKE_COUNT
         reply = await brain.chat(text, camera.photo, send_photo, "telegram")
         await reply_long(update, reply)
+        # "sesli söyle" istendi ama cevap araçsız bir modelden geldiyse (ör. Claude kredisi bitti) yine de oku
+        if wants_voice(text) and brain.SPOKE_COUNT == spoke_before:
+            await voice.say(reply)
 
     async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
@@ -457,6 +462,14 @@ def live_line() -> str:
         return "💬 Canlı sohbet: kapalı" + (" (Gemini anahtarı yok)" if st["enabled"] else " (/canli ac)")
     return (f"💬 Canlı sohbet: {'şu an konuşuyor' if st['active'] else 'hazır'} ({st['model']}, ses {st['voice']})"
             + (f", son hata: {st['error']}" if st["error"] else ""))
+
+
+_VOICE_ASK = re.compile(r"\b(sesli|sesle|konuş|oku bana|seslendir|hoparlör)", re.IGNORECASE)
+
+
+def wants_voice(text: str) -> bool:
+    """Telegram mesajı sesli cevap istiyor mu? ("saati sesli söyle", "konuş", "sesli oku")"""
+    return bool(_VOICE_ASK.search(text or ""))
 
 
 def voice_line() -> str:
