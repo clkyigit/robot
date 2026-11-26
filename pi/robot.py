@@ -179,6 +179,13 @@ def build_telegram():
             await update.message.reply_text(text[i:i + 4000])
 
     async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+        global LAST_REPLY
+        # "sesli oku", "oku", "tekrar söyle" gibi kısa istek: bir önceki cevabımı hoparlörden oku
+        if _READ_LAST.match(text or "") and LAST_REPLY:
+            await update.message.reply_text("🔊 Okuyorum.")
+            if not await voice.say(LAST_REPLY):
+                await update.message.reply_text(f"Okuyamadım: {voice.status()['error'] or 'ses kapalı (/ses ac)'}")
+            return
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
 
         async def send_photo(img: bytes) -> None:
@@ -186,6 +193,7 @@ def build_telegram():
 
         spoke_before = brain.SPOKE_COUNT
         reply = await brain.chat(text, camera.photo, send_photo, "telegram")
+        LAST_REPLY = reply
         await reply_long(update, reply)
         # "sesli söyle" istendi ama cevap araçsız bir modelden geldiyse (ör. Claude kredisi bitti) yine de oku
         if (VOICE_ALWAYS or wants_voice(text)) and brain.SPOKE_COUNT == spoke_before:
@@ -475,6 +483,10 @@ def live_line() -> str:
 
 
 _VOICE_ASK = re.compile(r"\b(sesli|sesle|konuş|oku bana|seslendir|hoparlör)", re.IGNORECASE)
+
+
+_READ_LAST = re.compile(r"^\W*(sesli\s+)?(oku|okur musun|söyle|tekrar\s+(et|oku|söyle)|sesli\s+söyle)\W*$", re.IGNORECASE)
+LAST_REPLY = ""
 
 
 def wants_voice(text: str) -> bool:

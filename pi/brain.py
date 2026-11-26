@@ -931,9 +931,10 @@ async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink, cha
         if claude:
             attempts.append(("claude", lambda: _think_claude(system, history, user_text, mem, take_photo, send_photo)))
         # Yedek modellerin araçları yok: sesli okumayı kod yapar, model "söyledim" dememeli
-        plain = system + ("\n\nŞU AN ARAÇLARIN YOK (fotoğraf, sesli_soyle vb. kullanamazsın). Sahibin sesli "
-                          "söylemeni isterse cevabını normal yaz; sistem onu hoparlörden kendisi okur. "
-                          "'Hoparlörden söyledim' gibi yapmadığın bir şeyi söyleme.")
+        plain = system + ("\n\nBu cevapta araçların yok (fotoğraf çekemezsin). SESLİ OKUMA: Sahibin sesli "
+                          "söylemeni/okumanı isterse cevabını normal yaz; yazdığın metin otomatik olarak "
+                          "hoparlörden okunur. Yani sesli okuyabiliyorsun; 'okuyamıyorum' ya da 'kendin "
+                          "okutabilirsin' deme, 'söyledim' de deme; sadece okunacak cevabı yaz.")
         if openai_client:
             attempts.append(("openai", lambda: _think_openai(plain, history, user_text)))
         if gemini:
