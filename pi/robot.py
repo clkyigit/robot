@@ -46,6 +46,7 @@ STARTED = time.time()
 
 TG = None  # Telegram uygulaması (kulakların cevabı sahibine yazabilmesi için)
 EARS_NOTIFY_WAKE = os.environ.get("EARS_NOTIFY_WAKE", "0").strip() == "1"
+VOICE_ALWAYS = os.environ.get("TTS_TELEGRAM", "0").strip() == "1"   # Telegram cevaplarını hep sesli oku
 LIVE_TELEGRAM = os.environ.get("LIVE_TELEGRAM", "1").strip() != "0"   # canlı sohbeti Telegram'a da yaz
 EARS_VERIFY = os.environ.get("EARS_VERIFY", "1").strip() != "0"   # yazıda da kelime yoksa yanlış alarm say
 _wake_msg = None   # silinebilsin diye son "Dinliyorum" mesajı
@@ -187,7 +188,7 @@ def build_telegram():
         reply = await brain.chat(text, camera.photo, send_photo, "telegram")
         await reply_long(update, reply)
         # "sesli söyle" istendi ama cevap araçsız bir modelden geldiyse (ör. Claude kredisi bitti) yine de oku
-        if wants_voice(text) and brain.SPOKE_COUNT == spoke_before:
+        if (VOICE_ALWAYS or wants_voice(text)) and brain.SPOKE_COUNT == spoke_before:
             await voice.say(reply)
 
     async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -388,7 +389,16 @@ def build_telegram():
         if not await guard(update):
             return
         arg = (context.args[0].lower() if context.args else "")
-        if arg in ("ac", "aç", "on", "1"):
+        global VOICE_ALWAYS
+        if arg in ("hep", "her"):
+            voice.set_enabled(True)
+            VOICE_ALWAYS = True
+            await update.message.reply_text("🔊 Telegram'a yazdığın her cevabı hoparlörden de okuyacağım. "
+                                            "Sadece istediğinde okumam için: /ses istek")
+        elif arg in ("istek", "normal"):
+            VOICE_ALWAYS = False
+            await update.message.reply_text("🔊 Telegram cevaplarını sadece 'sesli söyle' dersen okurum.")
+        elif arg in ("ac", "aç", "on", "1"):
             voice.set_enabled(True)
             await update.message.reply_text("🔊 Sesli cevap açık.")
         elif arg in ("kapa", "kapat", "off", "0"):
@@ -403,7 +413,7 @@ def build_telegram():
             st = voice.status()
             await update.message.reply_text(f"🔊 Okudum ({st['engine']})." if ok else f"Okuyamadım: {st['error']}")
         else:
-            await update.message.reply_text(voice_line() + "\nKullanım: /ses ac | /ses kapa | /ses test [metin]")
+            await update.message.reply_text(voice_line() + "\nKullanım: /ses ac | /ses kapa | /ses hep | /ses istek | /ses test [metin]")
 
     async def cmd_canli(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """/canli ac | /canli kapa: Gemini Live ile canlı sesli sohbet."""
@@ -476,7 +486,7 @@ def voice_line() -> str:
     st = voice.status()
     if not st["enabled"]:
         return "🔇 Ses: kapalı (/ses ac)"
-    return f"🔊 Ses: açık ({st['engine'] or 'henüz konuşmadı'})" + (f", son hata: {st['error']}" if st["error"] else "")
+    return f"🔊 Ses: açık{', Telegram cevapları da' if VOICE_ALWAYS else ''} ({st['engine'] or 'henüz konuşmadı'})" + (f", son hata: {st['error']}" if st["error"] else "")
 
 
 def ears_line() -> str:

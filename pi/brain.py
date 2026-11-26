@@ -930,10 +930,14 @@ async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink, cha
         attempts = []
         if claude:
             attempts.append(("claude", lambda: _think_claude(system, history, user_text, mem, take_photo, send_photo)))
+        # Yedek modellerin araçları yok: sesli okumayı kod yapar, model "söyledim" dememeli
+        plain = system + ("\n\nŞU AN ARAÇLARIN YOK (fotoğraf, sesli_soyle vb. kullanamazsın). Sahibin sesli "
+                          "söylemeni isterse cevabını normal yaz; sistem onu hoparlörden kendisi okur. "
+                          "'Hoparlörden söyledim' gibi yapmadığın bir şeyi söyleme.")
         if openai_client:
-            attempts.append(("openai", lambda: _think_openai(system, history, user_text)))
+            attempts.append(("openai", lambda: _think_openai(plain, history, user_text)))
         if gemini:
-            attempts.append(("gemini", lambda: _think_gemini(system, history, user_text)))
+            attempts.append(("gemini", lambda: _think_gemini(plain, history, user_text)))
         # Sesli sorular varsayılan olarak ücretsiz Gemini ile düşünülür (SES_BEYIN=claude ile eski sıra)
         if channel == "ses" and os.environ.get("SES_BEYIN", "gemini").strip() == "gemini":
             attempts.sort(key=lambda a: a[0] != "gemini")

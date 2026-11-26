@@ -39,6 +39,7 @@ MAX_SESSION_S = 14 * 60          # sesli oturum sınırı 15 dk
 OUT_RATE = 24000                 # Gemini'nin ses çıkışı
 IN_RATE = 16000                  # kulakların verdiği ses
 CHUNK = IN_RATE * 2 // 10        # 0,1 sn (16 bit)
+LEAD_MS = int(os.environ.get("TTS_LEAD_MS", "300"))
 ECHO_TAIL_S = 0.35               # hoparlör sustuktan sonra mikrofonu bu kadar daha kapalı tut
 
 Turn = Callable[[str, str], Awaitable[None]]
@@ -63,6 +64,7 @@ class Player:
             self.proc = await asyncio.create_subprocess_exec(
                 "aplay", "-q", "-D", DEVICE, "-t", "raw", "-f", "S16_LE", "-r", str(OUT_RATE), "-c", "1",
                 stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            data = bytes(OUT_RATE * 2 * LEAD_MS // 1000) + data   # USB hoparlör uyanırken ilk hece kesilmesin
         now = time.time()
         self.until = max(self.until, now) + len(data) / (OUT_RATE * 2)
         try:
