@@ -18,6 +18,7 @@ Ayarlar (.env):
   LIVE_TELEGRAM=1                her soru-cevabı Telegram'a da yaz
   LIVE_CAMERA=1                  sohbet sırasında kamera görüntüsü de gider (saniyede 1 kare; gizlilik modunda gitmez)
   LIVE_CAMERA_FPS=1
+  LIVE_SEARCH=1                  sohbette Google araması (güncel bilgi: haber, hava, kur, maç...)
   SPEAKER_DEVICE=default
 """
 
@@ -45,14 +46,17 @@ LEAD_MS = int(os.environ.get("TTS_LEAD_MS", "300"))
 ECHO_TAIL_S = 0.35
 CAMERA_ON = os.environ.get("LIVE_CAMERA", "1").strip() != "0"
 CAMERA_FPS = float(os.environ.get("LIVE_CAMERA_FPS", "1"))
-CAMERA_SIDE = 768                # Gemini Live için önerilen görüntü boyu               # hoparlör sustuktan sonra mikrofonu bu kadar daha kapalı tut
+CAMERA_SIDE = 768
+SEARCH_ON = os.environ.get("LIVE_SEARCH", "1").strip() != "0"                # Gemini Live için önerilen görüntü boyu               # hoparlör sustuktan sonra mikrofonu bu kadar daha kapalı tut
 
 Turn = Callable[[str, str], Awaitable[None]]
 
 VOICE_RULES = (
     "ŞU AN SESLİ KONUŞUYORSUN: Söylediğin her şey hoparlörden sesli okunuyor. Kısa ve doğal konuş, "
     "genelde bir-üç cümle yeter; liste, madde işareti, emoji ve bağlantı kullanma. Türkçe konuş. "
-    "Bu sesli sohbette araçların (fotoğraf çekme, geçmişe bakma, kod geliştirme) yok; bunlar gerekiyorsa "
+    "Güncel bir bilgi gerekirse (haber, hava durumu, döviz, maç, bir yerin çalışma saati, yeni bir gelişme) "
+    "Google araması yap; hafızandan tahmin etme, bulduğunu kısaca ve kaynağını belirterek söyle. "
+    "Bu sesli sohbette diğer araçların (fotoğraf çekme, geçmişe bakma, kod geliştirme) yok; bunlar gerekiyorsa "
     "sahibine Telegram'dan yazmasını söyle. Sahibin konuşmayı bitirmek isterse kısaca vedalaş."
 )
 CAMERA_RULES = (
@@ -140,6 +144,7 @@ class Live:
             "system_instruction": system + "\n\n" + VOICE_RULES + ("\n\n" + CAMERA_RULES if self._camera_ok() else ""),
             # uzun sohbet: eski kısmı özetleyerek sürdür (görüntülü oturumlar aksi halde ~2 dk ile sınırlı)
             "context_window_compression": {"sliding_window": {}},
+            **({"tools": [{"google_search": {}}]} if SEARCH_ON else {}),
             "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
             "input_audio_transcription": {},
             "output_audio_transcription": {},
