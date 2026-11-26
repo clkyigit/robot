@@ -62,7 +62,7 @@ VOICE_RULES = (
     "ŞU AN SESLİ KONUŞUYORSUN: Söylediğin her şey hoparlörden sesli okunuyor. Kısa ve doğal konuş, "
     "genelde bir-üç cümle yeter; liste, madde işareti, emoji ve bağlantı kullanma. Türkçe konuş. "
     "Güncel bir bilgi gerekirse (haber, hava durumu, döviz, maç, bir yerin çalışma saati, yeni bir gelişme) "
-    "Google araması yap; hafızandan tahmin etme, bulduğunu kısaca ve kaynağını belirterek söyle. "
+    "internette ara (Google araması ya da internette_ara aracı); hafızandan tahmin etme, bulduğunu kısaca ve kaynağını belirterek söyle. "
     "Sahibin laptop ekranına bakmanı isterse ekrana_bak aracını kullan. "
     "Bu sesli sohbette diğer araçların (fotoğraf çekme, geçmişe bakma, kod geliştirme) yok; bunlar gerekiyorsa "
     "sahibine Telegram'dan yazmasını söyle. Sahibin konuşmayı bitirmek isterse kısaca vedalaş."
@@ -166,11 +166,19 @@ class Live:
         }
 
     def _tools(self, search: bool) -> list:
-        tools = []
+        tools, funcs = [], []
         if SEARCH_ON and search:
             tools.append({"google_search": {}})
+        elif SEARCH_ON:                    # Live'ın kendi araması yoksa: kendi arama aracımız
+            funcs.append({
+                "name": "internette_ara",
+                "description": "Güncel bilgi için internette arar (haber, hava durumu, döviz, maç sonucu, bir yerin "
+                               "saatleri, yeni gelişmeler). Hafızandan tahmin etmek yerine bunu kullan.",
+                "parameters": {"type": "object", "properties": {
+                    "sorgu": {"type": "string", "description": "Ne aranacak (Türkçe, kısa)"}}, "required": ["sorgu"]},
+            })
         if self.screen_grab:
-            tools.append({"function_declarations": [{
+            funcs.append({
                 "name": "ekrana_bak",
                 "description": "Sahibinin laptop ekranını görmek için. Sahibin 'ekranıma bak', 'ekranda ne var', "
                                "'şu tabloyu oku' gibi bir şey dediğinde kullan. Laptopta onay penceresi çıkar; "
@@ -178,7 +186,9 @@ class Live:
                                "'5 dk izin ver' derse ekran birkaç saniyede bir güncellenir.",
                 "parameters": {"type": "object", "properties": {
                     "neden": {"type": "string", "description": "Ekranda neye bakacağın (onay penceresinde görünür)"}}},
-            }]})
+            })
+        if funcs:
+            tools.append({"function_declarations": funcs})
         return tools
 
     def _camera_ok(self) -> bool:
@@ -276,7 +286,10 @@ class Live:
         async def on_tool(fc) -> None:
             state["tool"] += 1
             try:
-                if fc.name != "ekrana_bak":
+                if fc.name == "internette_ara":
+                    import brain
+                    result = await brain.web_search(str((fc.args or {}).get("sorgu", "")))
+                elif fc.name != "ekrana_bak":
                     result = f"Bilinmeyen araç: {fc.name}"
                 else:
                     reason = (fc.args or {}).get("neden") or "Sesli sohbette ekranına bakmak istiyorum"
@@ -410,7 +423,8 @@ class Live:
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "active": self.active, "model": self.model or MODELS[0],
-                "camera": self._camera_ok(), "camera_frames": self.camera_frames, "search": self.search,
+                "camera": self._camera_ok(), "camera_frames": self.camera_frames,
+                "search": ("Google" if self.search else "kendi aracıyla") if SEARCH_ON else "",
                 "voice": VOICE_NAME, "turns": self.turns, "error": self.error}
 
 

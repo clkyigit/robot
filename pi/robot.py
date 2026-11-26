@@ -528,7 +528,7 @@ def live_line() -> str:
     if not live.available():
         return "💬 Canlı sohbet: kapalı" + (" (Gemini anahtarı yok)" if st["enabled"] else " (/canli ac)")
     return (f"💬 Canlı sohbet: {'şu an konuşuyor' if st['active'] else 'hazır'} ({st['model']}, ses {st['voice']}, "
-            f"kamera {'açık' if st['camera'] else 'kapalı'}, arama {'açık' if st['search'] else 'kapalı'})"
+            f"kamera {'açık' if st['camera'] else 'kapalı'}, arama {('açık, ' + st['search']) if st['search'] else 'kapalı'})"
             + (f", son hata: {st['error']}" if st["error"] else ""))
 
 

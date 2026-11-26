@@ -194,13 +194,14 @@ async def self_test() -> dict:
     return health()
 
 
-async def gemini_generate(contents, timeout: float = 25):
+async def gemini_generate(contents, timeout: float = 25, config=None):
     """GEMINI_MODELS listesini sırayla dener; ilk çalışan modelin cevabını döner."""
     global GEMINI_MODEL
     last = None
     for m in [GEMINI_MODEL] + [x for x in GEMINI_MODELS if x != GEMINI_MODEL]:
         try:
-            resp = await asyncio.wait_for(gemini.aio.models.generate_content(model=m, contents=contents), timeout)
+            resp = await asyncio.wait_for(gemini.aio.models.generate_content(
+                model=m, contents=contents, **({"config": config} if config else {})), timeout)
             if m != GEMINI_MODEL:
                 log.info("Gemini modeli değişti: %s -> %s", GEMINI_MODEL, m)
                 GEMINI_MODEL = m
@@ -215,6 +216,31 @@ async def gemini_generate(contents, timeout: float = 25):
             if not retryable:
                 raise
     raise last if last else RuntimeError("Gemini modeli yok")
+
+
+async def web_search(query: str) -> str:
+    """İnternette arar, kısa Türkçe özet + kaynak döner. Önce Gemini (Google araması), olmazsa OpenAI web araması."""
+    prompt = (f"Şu soruyu internette güncel kaynaklardan araştır ve Türkçe, kısa (en fazla 4 cümle) cevap ver; "
+              f"sonunda kaynağın adını yaz: {query}")
+    errors = []
+    if gemini:
+        try:
+            resp = await gemini_generate(prompt, timeout=40,
+                                         config=gtypes.GenerateContentConfig(tools=[{"google_search": {}}]))
+            if resp.text:
+                return resp.text.strip()
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"gemini: {explain_error(e)}")
+    if openai_client:
+        for tool in ("web_search", "web_search_preview"):
+            try:
+                resp = await asyncio.wait_for(openai_client.responses.create(
+                    model=OPENAI_MODEL, tools=[{"type": tool}], input=prompt), 60)
+                if resp.output_text:
+                    return resp.output_text.strip()
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"openai {tool}: {explain_error(e)}")
+    return "İnternette arayamadım: " + ("; ".join(errors) or "arama yapabilecek model yok")
 
 
 def model_status() -> dict:
