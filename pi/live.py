@@ -127,12 +127,13 @@ class Live:
         self.on_turn: Optional[Turn] = None
         self.camera = None            # robot.py verir
         self.camera_frames = 0
+        self.search = False
 
     def available(self) -> bool:
         import brain
         return self.enabled and getattr(brain, "gemini", None) is not None
 
-    def _config(self) -> dict:
+    def _config(self, search: bool = True) -> dict:
         import brain
         try:
             system = brain.system_prompt(brain.load_memory(), "ses")
@@ -144,7 +145,7 @@ class Live:
             "system_instruction": system + "\n\n" + VOICE_RULES + ("\n\n" + CAMERA_RULES if self._camera_ok() else ""),
             # uzun sohbet: eski kısmı özetleyerek sürdür (görüntülü oturumlar aksi halde ~2 dk ile sınırlı)
             "context_window_compression": {"sliding_window": {}},
-            **({"tools": [{"google_search": {}}]} if SEARCH_ON else {}),
+            **({"tools": [{"google_search": {}}]} if SEARCH_ON and search else {}),
             "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
             "input_audio_transcription": {},
             "output_audio_transcription": {},
@@ -173,17 +174,18 @@ class Live:
         try:
             last_err = None
             for model in MODELS:
-                try:
-                    async with brain.gemini.aio.live.connect(model=model, config=self._config()) as session:
-                        opened, self.model = True, model
-                        log.info("Canlı sohbet açıldı (%s)", model)
-                        await self._converse(session, queue, preroll, player)
-                    return True
-                except Exception as e:  # noqa: BLE001
-                    if opened:
-                        raise
-                    last_err = e
-                    log.warning("Canlı model açılamadı (%s): %s", model, e)
+                for search in ([True, False] if SEARCH_ON else [False]):   # arama desteklenmezse aramasız dene
+                    try:
+                        async with brain.gemini.aio.live.connect(model=model, config=self._config(search)) as session:
+                            opened, self.model, self.search = True, model, search
+                            log.info("Canlı sohbet açıldı (%s, arama %s)", model, "açık" if search else "kapalı")
+                            await self._converse(session, queue, preroll, player)
+                        return True
+                    except Exception as e:  # noqa: BLE001
+                        if opened:
+                            raise
+                        last_err = e
+                        log.warning("Canlı model açılamadı (%s, arama %s): %s", model, search, e)
             raise RuntimeError(f"Canlı sohbet açılamadı: {last_err}")
         except Exception as e:  # noqa: BLE001
             self.error = str(e)[:200]
@@ -293,7 +295,7 @@ class Live:
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "active": self.active, "model": self.model or MODELS[0],
-                "camera": self._camera_ok(), "camera_frames": self.camera_frames,
+                "camera": self._camera_ok(), "camera_frames": self.camera_frames, "search": self.search,
                 "voice": VOICE_NAME, "turns": self.turns, "error": self.error}
 
 
