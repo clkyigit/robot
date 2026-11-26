@@ -197,7 +197,8 @@ def build_telegram():
         await reply_long(update, reply)
         # "sesli söyle" istendi ama cevap araçsız bir modelden geldiyse (ör. Claude kredisi bitti) yine de oku
         if (VOICE_ALWAYS or wants_voice(text)) and brain.SPOKE_COUNT == spoke_before:
-            await voice.say(reply)
+            if not await voice.say(reply) and voice.enabled:
+                await update.message.reply_text(f"🔇 Sesli okuyamadım: {voice.status()['error'] or 'bilinmeyen hata'}")
 
     async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):

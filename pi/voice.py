@@ -165,7 +165,10 @@ class Voice:
                         break
                 if not made:
                     self.error = "; ".join(errors) or "Ses üretecek bir şey yok (Gemini/OpenAI anahtarı ya da espeak-ng)"
+                    log.error("Konuşamadım: %s", self.error)
                     return False
+                if errors:
+                    log.warning("Ses yedekten çıktı (%s): %s", self.engine, "; ".join(errors))
                 self.error = "; ".join(errors)   # yedeğe düştüyse neden düştüğü görünsün
                 self.speaking = True
                 await self._run("aplay", "-q", "-D", DEVICE, path, timeout=180)
