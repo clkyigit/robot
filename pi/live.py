@@ -16,6 +16,8 @@ Ayarlar (.env):
   LIVE_SPEECH_RMS=500            mikrofon bu seviyeyi geçerse "konuşuyor" sayılır
   LIVE_BARGE_IN=0                1: robot konuşurken de mikrofon açık (araya girebilirsin)
   LIVE_TELEGRAM=1                her soru-cevabı Telegram'a da yaz
+  LIVE_CAMERA=1                  sohbet sırasında kamera görüntüsü de gider (saniyede 1 kare; gizlilik modunda gitmez)
+  LIVE_CAMERA_FPS=1
   SPEAKER_DEVICE=default
 """
 
@@ -40,7 +42,10 @@ OUT_RATE = 24000                 # Gemini'nin ses çıkışı
 IN_RATE = 16000                  # kulakların verdiği ses
 CHUNK = IN_RATE * 2 // 10        # 0,1 sn (16 bit)
 LEAD_MS = int(os.environ.get("TTS_LEAD_MS", "300"))
-ECHO_TAIL_S = 0.35               # hoparlör sustuktan sonra mikrofonu bu kadar daha kapalı tut
+ECHO_TAIL_S = 0.35
+CAMERA_ON = os.environ.get("LIVE_CAMERA", "1").strip() != "0"
+CAMERA_FPS = float(os.environ.get("LIVE_CAMERA_FPS", "1"))
+CAMERA_SIDE = 768                # Gemini Live için önerilen görüntü boyu               # hoparlör sustuktan sonra mikrofonu bu kadar daha kapalı tut
 
 Turn = Callable[[str, str], Awaitable[None]]
 
@@ -50,6 +55,22 @@ VOICE_RULES = (
     "Bu sesli sohbette araçların (fotoğraf çekme, geçmişe bakma, kod geliştirme) yok; bunlar gerekiyorsa "
     "sahibine Telegram'dan yazmasını söyle. Sahibin konuşmayı bitirmek isterse kısaca vedalaş."
 )
+CAMERA_RULES = (
+    "KAMERAN AÇIK: Sohbet boyunca kameranın görüntüsünü saniyede bir kare olarak görüyorsun (önündeki kişi ve "
+    "masa). Sorulursa ya da gerçekten önemliyse gördüğünü söyle; gördüğün her şeyi sürekli anlatma. Emin "
+    "olmadığın şeyi görmüş gibi söyleme."
+)
+
+
+def small_jpeg(jpeg: bytes) -> bytes:
+    """Kamera karesini Gemini Live için küçültür (en uzun kenar 768)."""
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(jpeg))
+    im.thumbnail((CAMERA_SIDE, CAMERA_SIDE))
+    out = io.BytesIO()
+    im.convert("RGB").save(out, "JPEG", quality=70)
+    return out.getvalue()
 
 
 class Player:
@@ -100,6 +121,8 @@ class Live:
         self.started_at = 0.0
         self.turns = 0
         self.on_turn: Optional[Turn] = None
+        self.camera = None            # robot.py verir
+        self.camera_frames = 0
 
     def available(self) -> bool:
         import brain
@@ -114,12 +137,17 @@ class Live:
             system = "Sen bir masaüstü robotusun."
         return {
             "response_modalities": ["AUDIO"],
-            "system_instruction": system + "\n\n" + VOICE_RULES,
+            "system_instruction": system + "\n\n" + VOICE_RULES + ("\n\n" + CAMERA_RULES if self._camera_ok() else ""),
+            # uzun sohbet: eski kısmı özetleyerek sürdür (görüntülü oturumlar aksi halde ~2 dk ile sınırlı)
+            "context_window_compression": {"sliding_window": {}},
             "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
             "input_audio_transcription": {},
             "output_audio_transcription": {},
             "realtime_input_config": {"automatic_activity_detection": {"silence_duration_ms": 700}},
         }
+
+    def _camera_ok(self) -> bool:
+        return CAMERA_ON and self.camera is not None and getattr(self.camera, "enabled", False)
 
     async def run(self, preroll: bytes, ears, pending: list | None = None) -> bool:
         """Bir sohbet oturumu yürütür. Oturum açılamadıysa False (çağıran eski yönteme düşebilir)."""
@@ -212,6 +240,24 @@ class Live:
                             if self.on_turn:
                                 asyncio.create_task(self._safe_turn(heard, said))
 
+        async def watch() -> None:
+            """Kamerayı saniyede bir kare olarak gönderir. Kamera hata verirse sadece görüntü durur."""
+            self.camera_frames = 0
+            if not self._camera_ok():
+                await asyncio.Event().wait()
+            while True:
+                try:
+                    if self._camera_ok():
+                        jpg = await self.camera.frame()
+                        if jpg:
+                            await session.send_realtime_input(
+                                video=types.Blob(data=await asyncio.to_thread(small_jpeg, jpg), mime_type="image/jpeg"))
+                            self.camera_frames += 1
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Kamera görüntüsü gönderilemedi, görüntüsüz devam: %s", e)
+                    await asyncio.Event().wait()
+                await asyncio.sleep(1.0 / max(CAMERA_FPS, 0.1))
+
         async def watchdog() -> None:
             while True:
                 await asyncio.sleep(0.5)
@@ -223,7 +269,7 @@ class Live:
                 if not state["busy"] and not player.playing() and now - quiet_since > IDLE_S:
                     return
 
-        tasks = [asyncio.create_task(t()) for t in (send, receive, watchdog)]
+        tasks = [asyncio.create_task(t()) for t in (send, receive, watchdog, watch)]
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in done:
@@ -242,6 +288,7 @@ class Live:
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "active": self.active, "model": self.model or MODELS[0],
+                "camera": self._camera_ok(), "camera_frames": self.camera_frames,
                 "voice": VOICE_NAME, "turns": self.turns, "error": self.error}
 
 

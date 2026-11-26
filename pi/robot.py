@@ -519,7 +519,8 @@ def live_line() -> str:
     st = live.status()
     if not live.available():
         return "💬 Canlı sohbet: kapalı" + (" (Gemini anahtarı yok)" if st["enabled"] else " (/canli ac)")
-    return (f"💬 Canlı sohbet: {'şu an konuşuyor' if st['active'] else 'hazır'} ({st['model']}, ses {st['voice']})"
+    return (f"💬 Canlı sohbet: {'şu an konuşuyor' if st['active'] else 'hazır'} ({st['model']}, ses {st['voice']}, "
+            f"kamera {'açık' if st['camera'] else 'kapalı'})"
             + (f", son hata: {st['error']}" if st["error"] else ""))
 
 
@@ -750,6 +751,7 @@ async def lifespan(_app: FastAPI):
     watcher = asyncio.create_task(camera.idle_watcher())
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
     live.on_turn = on_live_turn
+    live.camera = camera
     ears.start(asyncio.get_running_loop(), on_heard, on_wake, on_live, live.available)
     bg = [asyncio.create_task(diary_loop()), asyncio.create_task(body_watch())]
 
