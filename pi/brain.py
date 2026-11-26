@@ -716,31 +716,40 @@ _STT_JUNK = ("altyazı m.k", "abone olmayı unutmayın", "izlediğiniz için te�
 
 
 async def transcribe(wav: bytes, hint: str = "") -> str:
-    """Türkçe ses kaydını yazıya çevirir: önce OpenAI, olmazsa Gemini. Konuşma yoksa boş döner.
-    hint: modele ipucu (ör. 'Robot, saat kaç?') — uyandırma kelimesinin doğru yazılmasına yardım eder."""
+    """Türkçe ses kaydını yazıya çevirir. Sıra STT_ORDER ile (varsayılan: önce ücretsiz Gemini, sonra OpenAI).
+    Konuşma yoksa boş döner. hint: modele ipucu (ör. 'Robot, saat kaç?')."""
     failures = []
     text = None
-    if openai_client:
+
+    async def by_openai():
         for m in STT_MODELS:
             try:
                 resp = await asyncio.wait_for(openai_client.audio.transcriptions.create(
                     model=m, file=("ses.wav", wav, "audio/wav"), language="tr",
                     **({"prompt": hint} if hint else {})), timeout=30)
-                text = (resp.text or "").strip()
-                break
+                return (resp.text or "").strip()
             except Exception as e:  # noqa: BLE001
                 failures.append(f"openai {m}: {explain_error(e)}")
                 log.warning("Yazıya çevirme (%s) olmadı: %s", m, e)
-    if text is None and gemini:
+        return None
+
+    async def by_gemini():
         try:
             resp = await gemini_generate([
                 gtypes.Part.from_bytes(data=wav, mime_type="audio/wav"),
                 "Bu ses kaydında konuşulanı Türkçe olarak aynen yazıya dök. Sadece söyleneni yaz, "
                 "yorum ekleme. Konuşma yoksa hiçbir şey yazma." + (f" Örnek biçim: {hint}" if hint else "")],
                 timeout=40)
-            text = (resp.text or "").strip()
+            return (resp.text or "").strip()
         except Exception as e:  # noqa: BLE001
             failures.append(f"gemini: {explain_error(e)}")
+            return None
+
+    engines = {"gemini": (gemini, by_gemini), "openai": (openai_client, by_openai)}
+    for name in [n.strip() for n in os.environ.get("STT_ORDER", "gemini,openai").split(",")]:
+        client, fn = engines.get(name, (None, None))
+        if client and text is None:
+            text = await fn()
     if text is None:
         raise RuntimeError("; ".join(failures) or "Sesi yazıya çevirecek model yok")
     if any(j in text.lower() for j in _STT_JUNK):
@@ -925,6 +934,9 @@ async def chat(user_text: str, take_photo: TakePhoto, send_photo: PhotoSink, cha
             attempts.append(("openai", lambda: _think_openai(system, history, user_text)))
         if gemini:
             attempts.append(("gemini", lambda: _think_gemini(system, history, user_text)))
+        # Sesli sorular varsayılan olarak ücretsiz Gemini ile düşünülür (SES_BEYIN=claude ile eski sıra)
+        if channel == "ses" and os.environ.get("SES_BEYIN", "gemini").strip() == "gemini":
+            attempts.sort(key=lambda a: a[0] != "gemini")
         answer = ""
         if not attempts:
             answer = "Henüz bir beynim yok. .env dosyasına en az bir API anahtarı eklenmeli."

@@ -1,10 +1,13 @@
 """Robotun sesi: cevapları USB hoparlörden sesli okur.
 
-Önce OpenAI'nin ses modeliyle (doğal ses) dener; anahtar yoksa ya da hata verirse internetsiz
-espeak-ng ile (robotik ses) okur. Çalma `aplay` ile ~/.asoundrc'deki varsayılan cihaza yapılır.
+Sıra TTS_ORDER ile belirlenir (varsayılan gemini,openai,espeak): önce Gemini Live'ın sesiyle
+(ücretsiz katmanda çalışır, canlı sohbetle aynı ses), olmazsa OpenAI, o da olmazsa internetsiz
+espeak-ng (robotik ses). Çalma `aplay` ile yapılır.
 
 Ayarlar (.env):
   TTS=1                       0 yaparsan sessiz başlar (Telegram: /ses ac | /ses kapa)
+  TTS_ORDER=gemini,openai,espeak
+  LIVE_VOICE=Kore             Gemini ses tonu (canlı sohbetle aynı)
   TTS_MODEL=gpt-4o-mini-tts   OpenAI ses modeli
   TTS_VOICE=alloy             OpenAI ses tonu
   SPEAKER_DEVICE=default      ya da plughw:CARD=Device,DEV=0 gibi
@@ -17,6 +20,7 @@ import os
 import re
 import shutil
 import tempfile
+import wave
 
 log = logging.getLogger("robot.voice")
 
@@ -24,6 +28,7 @@ MODEL = os.environ.get("TTS_MODEL", "gpt-4o-mini-tts").strip()
 VOICE = os.environ.get("TTS_VOICE", "alloy").strip()
 DEVICE = os.environ.get("SPEAKER_DEVICE", "default").strip()
 MAX_CHARS = int(os.environ.get("TTS_MAX_CHARS", "600"))
+ORDER = [e.strip() for e in os.environ.get("TTS_ORDER", "gemini,openai,espeak").split(",") if e.strip()]
 
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
 
@@ -61,6 +66,41 @@ class Voice:
         data = resp.content
         return data if isinstance(data, (bytes, bytearray)) and len(data) > 1000 else None
 
+    async def _gemini(self, text: str) -> bytes | None:
+        """Gemini Live'a metni okutur; 24 kHz ham ses döner."""
+        import brain
+        import live
+        if not getattr(brain, "gemini", None):
+            return None
+        cfg = {"response_modalities": ["AUDIO"],
+               "system_instruction": "Sen bir seslendiricisin. Sana verilen Türkçe metni hiçbir şey ekleme"
+                                     "den, değiştirmeden, doğal ve sıcak bir sesle aynen oku.",
+               "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": live.VOICE_NAME}}}}
+        last = None
+        for model in live.MODELS:
+            try:
+                pcm = bytearray()
+
+                async def run():
+                    async with brain.gemini.aio.live.connect(model=model, config=cfg) as session:
+                        await session.send_client_content(
+                            turns={"role": "user", "parts": [{"text": "Aynen oku: " + text}]}, turn_complete=True)
+                        async for resp in session.receive():
+                            if resp.data:
+                                pcm.extend(resp.data)
+                            if resp.server_content and resp.server_content.turn_complete:
+                                break
+                await asyncio.wait_for(run(), 60)
+                if len(pcm) > 2000:
+                    self.engine = f"gemini/{model}"
+                    return bytes(pcm)
+            except Exception as e:  # noqa: BLE001
+                last = e
+                log.warning("Gemini ses (%s) olmadı: %s", model, e)
+        if last:
+            raise last
+        return None
+
     @staticmethod
     async def _run(*cmd: str, timeout: float) -> None:
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL,
@@ -84,26 +124,37 @@ class Voice:
             fd, path = tempfile.mkstemp(suffix=".wav", prefix="robot-ses-")
             os.close(fd)
             try:
-                data = None
-                try:
-                    data = await self._openai(t)
-                except Exception as e:  # noqa: BLE001
-                    self.error = f"OpenAI ses: {str(e)[:120]}"
-                    log.warning("OpenAI ses üretemedi, espeak-ng'ye geçiyorum: %s", e)
-                if data:
-                    with open(path, "wb") as f:
-                        f.write(data)
-                    self.engine = f"openai/{MODEL}"
-                elif shutil.which("espeak-ng"):
-                    await self._run("espeak-ng", "-v", "tr", "-s", "155", "-w", path, t, timeout=30)
-                    self.engine = "espeak-ng"
-                else:
-                    self.error = "Ses üretecek bir şey yok (OpenAI anahtarı yok, espeak-ng kurulu değil)"
+                made, errors = False, []
+                for eng in ORDER:
+                    try:
+                        if eng == "gemini":
+                            pcm = await self._gemini(t)
+                            if pcm:
+                                with wave.open(path, "wb") as w:
+                                    w.setnchannels(1)
+                                    w.setsampwidth(2)
+                                    w.setframerate(24000)
+                                    w.writeframes(pcm)
+                                made = True
+                        elif eng == "openai":
+                            data = await self._openai(t)
+                            if data:
+                                with open(path, "wb") as f:
+                                    f.write(data)
+                                self.engine, made = f"openai/{MODEL}", True
+                        elif eng == "espeak" and shutil.which("espeak-ng"):
+                            await self._run("espeak-ng", "-v", "tr", "-s", "155", "-w", path, t, timeout=30)
+                            self.engine, made = "espeak-ng", True
+                    except Exception as e:  # noqa: BLE001
+                        errors.append(f"{eng}: {str(e)[:100]}")
+                    if made:
+                        break
+                if not made:
+                    self.error = "; ".join(errors) or "Ses üretecek bir şey yok (Gemini/OpenAI anahtarı ya da espeak-ng)"
                     return False
+                self.error = "; ".join(errors)   # yedeğe düştüyse neden düştüğü görünsün
                 self.speaking = True
                 await self._run("aplay", "-q", "-D", DEVICE, path, timeout=180)
-                if data:
-                    self.error = ""
                 return True
             except Exception as e:  # noqa: BLE001
                 self.error = str(e)[:150]
