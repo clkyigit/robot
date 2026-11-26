@@ -186,6 +186,15 @@ def build_telegram():
             if not await voice.say(LAST_REPLY):
                 await update.message.reply_text(f"Okuyamadım: {voice.status()['error'] or 'ses kapalı (/ses ac)'}")
             return
+        # "ekranıma bak", "ekranımda ne var" gibi istek: hangi model olursa olsun doğrudan laptopa sor
+        if _SCREEN_ASK.search(text or ""):
+            await update.message.reply_text("💻 Laptopta onay penceresi açıyorum, izin ver...")
+            await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+            LAST_REPLY = await screen_look(text)
+            await reply_long(update, LAST_REPLY)
+            if VOICE_ALWAYS:
+                await voice.say(LAST_REPLY)
+            return
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
 
         async def send_photo(img: bytes) -> None:
@@ -519,6 +528,8 @@ _VOICE_ASK = re.compile(r"\b(sesli|sesle|konuş|oku bana|seslendir|hoparlör)", 
 
 _READ_LAST = re.compile(r"^\W*(sesli\s+)?(oku|okur musun|söyle|tekrar\s+(et|oku|söyle)|sesli\s+söyle)\W*$", re.IGNORECASE)
 LAST_REPLY = ""
+_SCREEN_ASK = re.compile(r"(ekran(ım|ıma|ımda|ımdaki|a|da)?\b.*\b(bak|gör|ne var|oku))|laptop(um|uma|umda)?\b.*\bbak",
+                         re.IGNORECASE)
 
 
 def wants_voice(text: str) -> bool:
