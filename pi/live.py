@@ -38,7 +38,12 @@ IDLE_S = float(os.environ.get("LIVE_IDLE_S", "8"))
 SPEECH_RMS = float(os.environ.get("LIVE_SPEECH_RMS", "500"))
 BARGE_IN = os.environ.get("LIVE_BARGE_IN", "0").strip() == "1"
 DEVICE = os.environ.get("SPEAKER_DEVICE", "default").strip()
-MAX_SESSION_S = 14 * 60          # sesli oturum sınırı 15 dk
+# Bağlam sıkıştırma açıkken oturum süresi sınırsız; bağlantı ~10 dk'da bir yenilenir (kaldığı yerden devam).
+MAX_SESSION_S = float(os.environ.get("LIVE_MAX_MIN", "60")) * 60   # yine de bir güvenlik sınırı
+
+
+class _Reconnect(Exception):
+    """Sunucu bağlantıyı yeniliyor (GoAway): aynı oturuma tanıtıcıyla yeniden bağlan."""
 OUT_RATE = 24000                 # Gemini'nin ses çıkışı
 IN_RATE = 16000                  # kulakların verdiği ses
 CHUNK = IN_RATE * 2 // 10        # 0,1 sn (16 bit)
@@ -134,6 +139,7 @@ class Live:
         self.screen_grab = None       # robot.py verir: laptop ekranı (onaylı)
         self.camera_frames = 0
         self.search = False
+        self._handle = None           # oturumu yeni bağlantıda sürdürmek için
 
     def available(self) -> bool:
         import brain
@@ -151,6 +157,7 @@ class Live:
             "system_instruction": system + "\n\n" + VOICE_RULES + ("\n\n" + CAMERA_RULES if self._camera_ok() else ""),
             # uzun sohbet: eski kısmı özetleyerek sürdür (görüntülü oturumlar aksi halde ~2 dk ile sınırlı)
             "context_window_compression": {"sliding_window": {}},
+            "session_resumption": {"handle": self._handle},
             "tools": self._tools(search),
             "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
             "input_audio_transcription": {},
@@ -193,22 +200,49 @@ class Live:
         player = Player()
         self.active, self.started_at, self.error = True, time.time(), ""
         opened = False
+        self._handle = None
+        state = {"last_user": time.time(), "last_model": 0.0, "heard": "", "said": "", "busy": False,
+                 "tool": 0, "screen_until": 0.0}
         try:
             last_err = None
-            for model in MODELS:
-                for search in ([True, False] if SEARCH_ON else [False]):   # arama desteklenmezse aramasız dene
+            chosen = None
+            for model in MODELS:                 # ilk bağlantı: çalışan model/arama birleşimini bul
+                for search in ([True, False] if SEARCH_ON else [False]):
                     try:
-                        async with brain.gemini.aio.live.connect(model=model, config=self._config(search)) as session:
-                            opened, self.model, self.search = True, model, search
-                            log.info("Canlı sohbet açıldı (%s, arama %s)", model, "açık" if search else "kapalı")
-                            await self._converse(session, queue, preroll, player)
-                        return True
+                        session_cm = brain.gemini.aio.live.connect(model=model, config=self._config(search))
+                        session = await session_cm.__aenter__()
+                        chosen = (model, search, session_cm, session)
+                        break
                     except Exception as e:  # noqa: BLE001
-                        if opened:
-                            raise
                         last_err = e
                         log.warning("Canlı model açılamadı (%s, arama %s): %s", model, search, e)
-            raise RuntimeError(f"Canlı sohbet açılamadı: {last_err}")
+                if chosen:
+                    break
+            if not chosen:
+                raise RuntimeError(f"Canlı sohbet açılamadı: {last_err}")
+            model, search, session_cm, session = chosen
+            opened, self.model, self.search = True, model, search
+            log.info("Canlı sohbet açıldı (%s, arama %s)", model, "açık" if search else "kapalı")
+            reconnects = 0
+            first = True
+            while True:
+                try:
+                    try:
+                        await self._converse(session, queue, preroll if first else b"", player, state)
+                        return True                  # sessizlikle bitti
+                    finally:
+                        first = False
+                        try:
+                            await session_cm.__aexit__(None, None, None)
+                        except Exception:  # noqa: BLE001
+                            pass
+                except Exception as e:  # noqa: BLE001 — GoAway ya da kopma: aynı oturumu sürdür
+                    if not self._handle or reconnects >= 5:
+                        raise
+                    reconnects += 1
+                    log.info("Canlı sohbet bağlantısı yenileniyor (%d): %s", reconnects, type(e).__name__)
+                    session_cm = brain.gemini.aio.live.connect(model=model, config=self._config(search))
+                    session = await session_cm.__aenter__()
         except Exception as e:  # noqa: BLE001
             self.error = str(e)[:200]
             log.error("Canlı sohbet hatası: %s", e)
@@ -219,10 +253,9 @@ class Live:
             self.active = False
             log.info("Canlı sohbet kapandı (%d tur, %.0f sn)", self.turns, time.time() - self.started_at)
 
-    async def _converse(self, session, queue: asyncio.Queue, preroll: bytes, player: Player) -> None:
+    async def _converse(self, session, queue: asyncio.Queue, preroll: bytes, player: Player, state: dict) -> None:
         from google.genai import types
-        state = {"last_user": time.time(), "last_model": 0.0, "heard": "", "said": "", "busy": False,
-                 "tool": 0, "screen_until": 0.0}
+        state["busy"] = False
         bg: set = set()
 
         async def send_screen(img: bytes) -> None:
@@ -290,6 +323,11 @@ class Live:
         async def receive() -> None:
             while True:
                 async for resp in session.receive():
+                    upd = getattr(resp, "session_resumption_update", None)
+                    if upd and getattr(upd, "resumable", False) and getattr(upd, "new_handle", None):
+                        self._handle = upd.new_handle
+                    if getattr(resp, "go_away", None):
+                        raise _Reconnect()
                     if getattr(resp, "tool_call", None) and resp.tool_call.function_calls:
                         for fc in resp.tool_call.function_calls:
                             t = asyncio.create_task(on_tool(fc))
@@ -350,6 +388,10 @@ class Live:
                     return
 
         tasks = [asyncio.create_task(t()) for t in (send, receive, watchdog, watch)]
+        if state["screen_until"] > time.time():          # yeniden bağlandık: ekran izlemeye devam
+            t = asyncio.create_task(screen_stream())
+            bg.add(t)
+            t.add_done_callback(bg.discard)
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in done:
