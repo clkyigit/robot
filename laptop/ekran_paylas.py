@@ -3,14 +3,20 @@
 Robot laptop ekranına bakmak istediğinde bir onay penceresi açar. İzin verirsen ekranın bir görüntüsünü
 robota gönderir; reddedersen hiçbir şey gitmez. Robot laptopa bağlanmaz; bu program robota sorar.
 
-İlk açılışta robot adresi (ör. http://192.168.68.106:8080) ve API_TOKEN sorulur, %APPDATA%\\RobotEkran'a kaydedilir.
+Adres ya da anahtar yazmak gerekmez: program robotu aynı ağda kendisi bulur (pi.local ya da ağ taraması),
+ekranda 6 haneli bir kod gösterir; Telegram'dan robota "/esle KOD" yazınca bağlanır. Ayarlar
+%APPDATA%\\RobotEkran'a kaydedilir. Robotun adresi değişirse kendisi yeniden bulur.
 """
 import base64
 import io
 import json
 import os
 import queue
+import random
+import socket
 import threading
+import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 import time
 import tkinter as tk
 import urllib.request
@@ -20,6 +26,7 @@ from PIL import ImageGrab
 
 CFG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "RobotEkran")
 CFG = os.path.join(CFG_DIR, "ayar.json")
+PORT = 8080
 ASK_SECONDS = 30
 WINDOW_MINUTES = 5
 
@@ -32,6 +39,54 @@ def load_cfg() -> dict:
         return {}
 
 
+def get_json(url: str, body: dict | None = None, token: str = "", timeout: float = 20) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def is_robot(base: str, timeout: float = 0.6) -> bool:
+    try:
+        return bool(get_json(base + "/api/hello", timeout=timeout).get("robot"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def local_prefixes() -> list[str]:
+    """Laptopun bağlı olduğu ağların ilk üç hanesi (ör. 192.168.1.)."""
+    ips = set()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))          # paket gitmez, sadece hangi ağ kartının kullanılacağını öğrenir
+        ips.add(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        ips.update(socket.gethostbyname_ex(socket.gethostname())[2])
+    except OSError:
+        pass
+    return sorted({ip.rsplit(".", 1)[0] + "." for ip in ips
+                   if ip.count(".") == 3 and not ip.startswith(("127.", "169.254."))})
+
+
+def find_robot(hint: str = "") -> str:
+    """Robotu ağda bulur; bulamazsa boş döner."""
+    for base in [hint, f"http://pi.local:{PORT}"]:
+        if base and is_robot(base, 1.5):
+            return base
+    cands = [f"http://{p}{i}:{PORT}" for p in local_prefixes() for i in range(1, 255)]
+    with ThreadPoolExecutor(max_workers=64) as ex:
+        for base, ok in zip(cands, ex.map(is_robot, cands)):
+            if ok:
+                return base
+    return ""
+
+
 def save_cfg(cfg: dict) -> None:
     os.makedirs(CFG_DIR, exist_ok=True)
     with open(CFG, "w", encoding="utf-8") as f:
@@ -42,20 +97,19 @@ class App:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("Robot ekran paylaşımı")
-        self.root.geometry("380x170")
+        self.root.geometry("420x210")
         self.status = "Başlıyor…"
-        self.lbl = tk.Label(self.root, text=self.status, wraplength=350, justify="left", font=("Segoe UI", 10))
+        self.lbl = tk.Label(self.root, text=self.status, wraplength=390, justify="left", font=("Segoe UI", 11))
         self.lbl.pack(padx=12, pady=12, anchor="w")
         self.allow_lbl = tk.Label(self.root, text="", fg="#b35c00", font=("Segoe UI", 9))
         self.allow_lbl.pack(padx=12, anchor="w")
         row = tk.Frame(self.root)
         row.pack(pady=10)
         tk.Button(row, text="İzni şimdi kapat", command=self.revoke).pack(side="left", padx=4)
-        tk.Button(row, text="Ayarlar", command=self.settings).pack(side="left", padx=4)
+        tk.Button(row, text="Yeniden eşle", command=self.repair).pack(side="left", padx=4)
+        tk.Button(row, text="Elle adres", command=self.settings).pack(side="left", padx=4)
         tk.Button(row, text="Çık", command=self.root.destroy).pack(side="left", padx=4)
         self.cfg = load_cfg()
-        if not self.cfg.get("url") or not self.cfg.get("token"):
-            self.root.after(100, self.settings)
         self.allow_until = 0.0
         self.last_id = None
         self.q: queue.Queue = queue.Queue()
@@ -64,26 +118,47 @@ class App:
 
     # -------------------------------------------------- ayarlar
     def settings(self) -> None:
-        url = simpledialog.askstring("Robot adresi", "Robotun adresi:",
-                                     initialvalue=self.cfg.get("url", "http://192.168.68.106:8080"), parent=self.root)
+        """Otomatik bulma olmazsa (ör. Tailscale adresi) adresi elle yazmak için. Anahtar eşleşmeyle gelir."""
+        url = simpledialog.askstring("Robot adresi", "Robotun adresi (ör. http://192.168.1.190:8080):",
+                                     initialvalue=self.cfg.get("url", ""), parent=self.root)
         if url:
-            token = simpledialog.askstring("Erişim anahtarı", "API_TOKEN (uygulamaya girdiğin anahtar):",
-                                           show="•", parent=self.root)
-            if token:
-                self.cfg = {"url": url.strip().rstrip("/"), "token": token.strip()}
+            self.cfg["url"] = url.strip().rstrip("/")
+            save_cfg(self.cfg)
+
+    def repair(self) -> None:
+        self.cfg.pop("token", None)
+        save_cfg(self.cfg)
+
+    def pair(self) -> bool:
+        """Kod gösterir, sahibi Telegram'dan /esle KOD yazana kadar bekler (5 dk)."""
+        code = f"{random.SystemRandom().randint(0, 999999):06d}"
+        try:
+            get_json(self.cfg["url"] + "/api/pair/request", {"code": code}, timeout=8)
+        except Exception as e:  # noqa: BLE001
+            self.status = f"Eşleşme başlatılamadı: {str(e)[:100]}"
+            return False
+        self.status = f"🔑 Telegram'dan robota şunu yaz:\n\n/esle {code}"
+        end = time.time() + 300
+        while time.time() < end and "token" not in self.cfg:
+            time.sleep(2)
+            try:
+                r = get_json(self.cfg["url"] + "/api/pair/status", {"code": code}, timeout=8)
+            except Exception:  # noqa: BLE001
+                continue
+            if r.get("ok") and r.get("token"):
+                self.cfg["token"] = r["token"]
                 save_cfg(self.cfg)
+                return True
+            if not r.get("waiting"):
+                break
+        return "token" in self.cfg
 
     def revoke(self) -> None:
         self.allow_until = 0.0
 
     # -------------------------------------------------- robotla konuşma (arka plan)
     def api(self, path: str, body: dict | None = None) -> dict:
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.cfg["url"] + path, data=data, method="POST" if data else "GET",
-                                     headers={"Authorization": "Bearer " + self.cfg["token"],
-                                              "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.loads(r.read() or b"{}")
+        return get_json(self.cfg["url"] + path, body, self.cfg.get("token", ""))
 
     def grab(self) -> str:
         img = ImageGrab.grab(all_screens=True).convert("RGB")
@@ -93,16 +168,37 @@ class App:
         return base64.b64encode(buf.getvalue()).decode()
 
     def loop(self) -> None:
+        fails = 0
         while True:
-            if not self.cfg.get("url") or not self.cfg.get("token"):
-                self.status = "Ayar bekleniyor (Ayarlar düğmesi)."
-                time.sleep(2)
+            if not self.cfg.get("url") or fails >= 3:
+                self.status = "🔎 Robotu ağda arıyorum…"
+                url = find_robot(self.cfg.get("url", ""))
+                if not url:
+                    self.status = ("❌ Robotu bulamadım. Laptop robotla aynı Wi-Fi'da mı? Robot açık mı?\n"
+                                   "(Farklı ağdaysan 'Elle adres' ile yaz.) 15 sn sonra tekrar deneyeceğim.")
+                    time.sleep(15)
+                    continue
+                self.cfg["url"], fails = url, 0
+                save_cfg(self.cfg)
+            if not self.cfg.get("token"):
+                if not self.pair():
+                    time.sleep(3)
                 continue
             try:
                 r = self.api("/api/screen/poll")
-                self.status = "✅ Robota bağlı. Robot ekranına bakmak isterse sana soracak."
+                fails = 0
+                self.status = f"✅ Robota bağlı ({self.cfg['url']}).\nRobot ekranına bakmak isterse sana soracak."
+            except urllib.error.HTTPError as e:
+                if e.code == 401:          # anahtar değişmiş: yeniden eşle
+                    self.cfg.pop("token", None)
+                    save_cfg(self.cfg)
+                else:
+                    self.status = f"❌ Robot hata verdi: {e.code}"
+                    time.sleep(5)
+                continue
             except Exception as e:  # noqa: BLE001
-                self.status = f"❌ Robota ulaşılamıyor: {str(e)[:120]}"
+                fails += 1
+                self.status = f"❌ Robota ulaşılamıyor ({fails}/3): {str(e)[:100]}"
                 time.sleep(5)
                 continue
             req = r.get("request")

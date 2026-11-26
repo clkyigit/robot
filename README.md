@@ -128,6 +128,10 @@ Kurulum (bir kez): `bash pi/gelisim_kurulum.sh`. Robot GitHub'a gönderiyorsa, b
 (`/api/screen/poll`); robot `laptop_ekrani` aracıyla bakmak isteyince laptopta İzin ver / 5 dk izin ver / Reddet
 penceresi çıkar. İzin verilirse ekran görüntüsü `/api/screen/answer` ile gönderilir, reddedilirse hiçbir şey gitmez.
 
+Adres ve anahtar yazılmaz: program robotu aynı ağda bulur (`/api/hello`, önce `pi.local`, sonra ağ taraması),
+6 haneli kod gösterir; Telegram'dan `/esle KOD` yazılınca anahtarı bir kez alır (`/api/pair/*`, 5 dk geçerli).
+Robot ekrana bakmayı Claude olmadan da `/ekran [soru]` komutuyla yapar.
+
 ## Uygulama API'si
 
 Her istekte `Authorization: Bearer API_TOKEN` başlığı (ya da `?token=`) gerekir.

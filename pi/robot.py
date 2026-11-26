@@ -435,6 +435,19 @@ def build_telegram():
             live.enabled = False
         await update.message.reply_text(live_line() + "\nKullanım: /canli ac | /canli kapa")
 
+    async def cmd_esle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/esle KOD: laptoptaki ekran programını robota bağlar (programın gösterdiği kod)."""
+        if not await guard(update):
+            return
+        code = (context.args[0] if context.args else "").strip()
+        if not PAIR["code"] or time.time() - PAIR["at"] > 300:
+            await update.message.reply_text("Bekleyen bir eşleşme yok. Laptopta ekran programını aç; bir kod gösterecek.")
+        elif code != PAIR["code"]:
+            await update.message.reply_text("Kod tutmadı. Laptopta görünen 6 haneli kodu yaz: /esle 123456")
+        else:
+            PAIR["ok"] = True
+            await update.message.reply_text(f"✅ Eşleşti ({PAIR['from']}). Laptoptaki program birkaç saniyede bağlanır.")
+
     async def cmd_ekran(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """/ekran [soru]: laptop ekranına (onayla) bakar. Claude kredisi olmasa da çalışır."""
         if not await guard(update):
@@ -484,6 +497,7 @@ def build_telegram():
     app.add_handler(CommandHandler("ses", cmd_ses))
     app.add_handler(CommandHandler("canli", cmd_canli))
     app.add_handler(CommandHandler("ekran", cmd_ekran))
+    app.add_handler(CommandHandler("esle", cmd_esle))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     return app
@@ -976,6 +990,42 @@ async def diary(day: str = ""):
         return {"day": day, "text": brain.diary_text(day) or ""}
     d = brain.recent_diaries(1)
     return {"day": d[-1][0], "text": d[-1][1]} if d else {"day": "", "text": ""}
+
+
+# ---------------- laptop programı için: adres/anahtar yazmadan eşleşme
+# Program ağda /api/hello'yu bulur, ekranda 6 haneli bir kod gösterir ve /api/pair/request ile bildirir.
+# Sahibi Telegram'dan /esle KOD yazınca program anahtarı /api/pair/status'tan bir kez alır.
+PAIR: dict = {"code": "", "at": 0.0, "ok": False, "from": ""}
+
+
+class PairIn(BaseModel):
+    code: str
+
+
+@api.get("/api/hello")
+async def hello():
+    return {"robot": True, "name": "robot", "pair": True}
+
+
+@api.post("/api/pair/request")
+async def pair_request(body: PairIn, request: Request):
+    code = body.code.strip()
+    if not (code.isdigit() and len(code) == 6):
+        raise HTTPException(400, "Kod 6 haneli olmalı")
+    if PAIR["code"] and not PAIR["ok"] and time.time() - PAIR["at"] < 60 and PAIR["code"] != code:
+        raise HTTPException(429, "Bekleyen başka bir eşleşme var, biraz sonra dene")
+    PAIR.update(code=code, at=time.time(), ok=False, **{"from": request.client.host if request.client else ""})
+    return {"ok": True}
+
+
+@api.post("/api/pair/status")
+async def pair_status(body: PairIn):
+    if not PAIR["code"] or body.code.strip() != PAIR["code"] or time.time() - PAIR["at"] > 300:
+        return {"ok": False}
+    if not PAIR["ok"]:
+        return {"ok": False, "waiting": True}
+    PAIR.update(code="", ok=False)        # anahtar tek sefer verilir
+    return {"ok": True, "token": API_TOKEN}
 
 
 @api.get("/api/screen/poll", dependencies=auth)
