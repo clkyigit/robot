@@ -13,7 +13,7 @@ for n, (fn, bounds, _) in PARTS.items():
     meshes[n] = (assembly_transform(n, v), f)
 light = np.array([0.4, -0.6, 0.7]); light /= np.linalg.norm(light)
 fig = plt.figure(figsize=(14, 8), dpi=110)
-for k, (el, az, title) in enumerate(((15, -60, "Önden"), (15, 120, "Arkadan (USB, DC jak)"), (10, 0, "Sağdan (GPIO penceresi)"))):
+for k, (el, az, title) in enumerate(((15, -60, "Önden (DC jak sol-önde)"), (15, 150, "Arkadan (GPIO penceresi)"), (10, 0, "Sağdan (USB/Ethernet)"))):
     ax = fig.add_subplot(1, 3, k + 1, projection="3d")
     T, C = [], []
     for n, (v, f) in meshes.items():
