@@ -22,6 +22,7 @@ COLORS = {
     "sevgi": (255, 120, 160),       # pembe
     "kafasi_karisik": (190, 140, 230),  # mor
     "merakli": (93, 220, 200),      # parlak turkuaz
+    "utangac": (255, 175, 190),     # yumuşak pembe-şeftali
 }
 EXPRESSIONS = list(COLORS)
 
@@ -82,6 +83,14 @@ def face(expr: str = "normal", look=(0.0, 0.0), blink: float = 0.0, t: float = 0
         elif expr == "saskin":
             d.ellipse([S(cx - 26), S(cy - 26), S(cx + 26), S(cy + 26)], fill=col)
             d.ellipse([S(cx - 9), S(cy - 9), S(cx + 9), S(cy + 9)], fill=BG)
+        elif expr == "utangac":
+            # yarı kapalı, aşağı bakan göz: üstü düz, altı yuvarlak (alt yarım elips)
+            top = cy + 6
+            h = max(3, 22 * (1 - blink))
+            d.chord([S(cx - 23), S(top - h), S(cx + 23), S(top + h)], 0, 180, fill=col)
+            d.line([S(cx - 23), S(top), S(cx + 23), S(top)], fill=soft, width=S(3))   # üst kapak çizgisi
+            if h > 10:
+                d.ellipse([S(cx + 4), S(top + 4), S(cx + 12), S(top + 12)], fill=(255, 240, 245))
         else:
             d.rounded_rectangle([S(cx - ew / 2), S(cy - eh / 2), S(cx + ew / 2), S(cy + eh / 2)],
                                 radius=S(min(ew, eh) / 2.2), fill=col)
@@ -93,7 +102,9 @@ def face(expr: str = "normal", look=(0.0, 0.0), blink: float = 0.0, t: float = 0
                 d.ellipse([S(cx + 8), S(cy + 18), S(cx + 13), S(cy + 23)], fill=(235, 255, 248))
 
     # yanaklar
-    if expr in ("mutlu", "sevgi", "sicak"):
+    if expr == "utangac":
+        cheek = (235, 105, 140)         # belirgin ama hafif pembe yanaklar
+    elif expr in ("mutlu", "sevgi", "sicak"):
         cheek = (240, 120, 140)
     elif expr in ("normal", "dinliyor", "merakli"):
         cheek = (90, 60, 70)
@@ -113,6 +124,8 @@ def face(expr: str = "normal", look=(0.0, 0.0), blink: float = 0.0, t: float = 0
         d.chord([S(mx - 22), S(my - 14), S(mx + 22), S(my + 20)], 0, 180, fill=col)
     elif expr == "merakli":
         d.ellipse([S(mx - 7), S(my - 4), S(mx + 7), S(my + 10)], fill=col)
+    elif expr == "utangac":                       # küçük, çekingen gülümseme
+        d.arc([S(mx - 8), S(my - 2), S(mx + 8), S(my + 8)], 20, 160, fill=col, width=S(4))
     elif expr == "dusunuyor":
         d.line([S(mx - 12), S(my + 2), S(mx + 12), S(my - 2)], fill=col, width=S(6))
         for k, r in enumerate((4, 6, 8)):          # sırayla beliren düşünce baloncukları

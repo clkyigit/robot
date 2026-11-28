@@ -91,7 +91,7 @@ CHANNELS = {
 # ---------------------------------------------------------------- yüz (ekran servisi face.py okur)
 FACE_FILE = pathlib.Path("/dev/shm/robot-face.json")
 FACE_EXPRESSIONS = ["normal", "mutlu", "dinliyor", "dusunuyor", "uykulu", "sicak", "saskin", "sevgi",
-                    "kafasi_karisik", "merakli"]
+                    "kafasi_karisik", "merakli", "utangac"]
 _face_by_tool = False
 
 

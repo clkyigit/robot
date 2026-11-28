@@ -215,6 +215,8 @@ class Animator:
                 self.look_target = [0.7, -0.9]
             elif expr in ("uykulu",):
                 self.look_target = [0.0, 0.3]
+            elif expr == "utangac":
+                self.look_target = [random.uniform(-0.6, 0.6), random.uniform(0.3, 0.6)]   # aşağı, çekingen
             else:
                 self.look_target = [random.uniform(-0.8, 0.8), random.uniform(-0.6, 0.6)]
                 if random.random() < 0.4:
