@@ -443,18 +443,46 @@ class TV:
                 return True
             return bool(re.match(rf"^{num}(?!\d)", n)) and len(n) > len(num)
 
-        await self._pass_profile()
-        for _ in range(8):                       # ana ekran gelsin
-            if await self._tap_text(lambda t: _norm(t) in ("tumkanallar", "tumkanallari", "kanallar", "canlitv")):
-                break
-            await self._pass_profile()
-            await asyncio.sleep(1.5)
-        await asyncio.sleep(3)
-        for _ in range(14):
-            hit = await self._tap_text(is_target)
-            if hit:
-                return hit
-            await self._shell(" ; ".join(["input keyevent KEYCODE_DPAD_DOWN"] * 4))
+        # Yol: profil (Admin) -> sol menü "Canlı TV" -> "Kanallar" -> kanal
+        done_live = done_list = False
+        lefts = 0
+        for _ in range(24):
+            nodes = await self._ui()
+            norms = [(_norm(t), t, x, y) for t, x, y in nodes]
+            if any("kimizliyor" in n for n, *_ in norms):
+                await self._pass_profile()
+                continue
+            hit = next(((t, x, y) for n, t, x, y in norms if is_target(t)), None)
+            if hit and done_live:
+                await self._shell(f"input tap {hit[1]} {hit[2]}")
+                await asyncio.sleep(1)
+                await self._shell("input keyevent KEYCODE_DPAD_CENTER")
+                return hit[0]
+            live = next(((x, y) for n, t, x, y in norms if n in ("canlitv", "canli", "canliyayin")), None)
+            if live and not done_live:
+                await self._shell(f"input tap {live[0]} {live[1]}")
+                done_live = True
+                await asyncio.sleep(3)
+                continue
+            lst = next(((x, y) for n, t, x, y in norms if n in ("kanallar", "tumkanallar", "tumkanallari")), None)
+            if lst and done_live and not done_list:
+                await self._shell(f"input tap {lst[0]} {lst[1]}")
+                done_list = True
+                await asyncio.sleep(3)
+                continue
+            if not done_live and lefts < 4:      # sol menüyü aç (yazılar odaklanınca görünür)
+                await self._shell("input keyevent KEYCODE_DPAD_LEFT")
+                lefts += 1
+                await asyncio.sleep(1.2)
+                continue
+            if not done_live and lefts >= 4:     # menüde yukarı/aşağı gezerek "Canlı TV"yi ara
+                await self._shell("input keyevent KEYCODE_DPAD_DOWN")
+                lefts += 1
+                if lefts > 14:
+                    return ""
+                await asyncio.sleep(0.8)
+                continue
+            await self._shell(" ; ".join(["input keyevent KEYCODE_DPAD_DOWN"] * 4))   # listede aşağı
             await asyncio.sleep(1)
         return ""
 
