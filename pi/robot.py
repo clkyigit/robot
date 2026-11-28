@@ -530,9 +530,16 @@ def build_telegram():
         a = context.args or []
         if not a:
             await update.message.reply_text("📺 Kullanım: /tv ac · kapat · ses_ac 5 · ses_kis 3 · sessiz · "
-                                            "uygulama netflix · youtube <video> · ara <arama> · tvplus <kanal> · ev · geri")
+                                            "uygulama netflix · youtube <video> · ara <arama> · tvplus <kanal> · ekran · paketler · ev · geri")
             return
         act = {"ara": "youtube_ara", "tv+": "tvplus"}.get(a[0].lower(), a[0])
+        if act.lower() in ("ekran", "goruntu", "görüntü", "bak"):
+            img, info = await home.tv.screenshot()
+            if img:
+                await update.message.reply_photo(img, caption=("📺 TV ekranı\n" + info)[:1000])
+            else:
+                await update.message.reply_text("📺 " + info)
+            return
         await update.message.reply_text(await home.tv.command(act, " ".join(a[1:])))
 
     async def cmd_dur(update: Update, context: ContextTypes.DEFAULT_TYPE):

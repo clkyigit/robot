@@ -338,6 +338,20 @@ class TV:
                     json.dump({"ip": hits[0]}, f)
         return hits[0] if hits else ""
 
+    async def screenshot(self) -> tuple[bytes | None, str]:
+        """TV ekranının görüntüsü (PNG) — robot TV'de ne olduğunu görebilsin."""
+        err = await self._connect()
+        if err:
+            return None, err
+        target = TV_IP if ":" in TV_IP else f"{TV_IP}:5555"
+        p = await asyncio.create_subprocess_exec("adb", "-s", target, "exec-out", "screencap", "-p",
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, e = await asyncio.wait_for(p.communicate(), 20)
+        if out[:8] != b"\x89PNG\r\n\x1a\n":
+            return None, "TV ekran görüntüsü alınamadı (" + (e or out)[:120].decode(errors="ignore") + ")"
+        app = await self._shell("dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' | head -2")
+        return out, app
+
     async def _connect(self) -> str | None:
         global TV_IP
         if not shutil.which("adb"):
