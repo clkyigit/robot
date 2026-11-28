@@ -62,6 +62,11 @@ SEARCH_ON = os.environ.get("LIVE_SEARCH", "1").strip() != "0"                # G
 Turn = Callable[[str, str], Awaitable[None]]
 
 VOICE_RULES = (
+    "DİL: Sahibin seninle HER ZAMAN TÜRKÇE konuşur. Duyduğun sesi Türkçe olarak anla; kulağa Korece, İspanyolca "
+    "ya da başka bir dil gibi gelse bile Türkçe bir cümle olarak yorumla ve Türkçe cevap ver. Anlamadıysan "
+    "Türkçe 'Tekrar söyler misin?' de. "
+    "MÜZİK: Sahibin bir şarkı, sanatçı ya da müzik isterse hemen sarki_cal aracını kullan; adı belli değilse "
+    "duyduğuna en yakın şarkıyı seç, sadece hiç anlaşılmadıysa adını sor. "
     "ŞU AN SESLİ KONUŞUYORSUN: Söylediğin her şey hoparlörden sesli okunuyor. Kısa ve doğal konuş, "
     "genelde bir-üç cümle yeter; liste, madde işareti, emoji ve bağlantı kullanma. Türkçe konuş. "
     "Güncel bir bilgi gerekirse (haber, hava durumu, döviz, maç, bir yerin çalışma saati, yeni bir gelişme) "
@@ -143,12 +148,13 @@ class Live:
         self.camera_frames = 0
         self.search = False
         self._handle = None           # oturumu yeni bağlantıda sürdürmek için
+        self._lang = True
 
     def available(self) -> bool:
         import brain
         return self.enabled and getattr(brain, "gemini", None) is not None
 
-    def _config(self, search: bool = True) -> dict:
+    def _config(self, search: bool = True, lang: bool = True) -> dict:
         import brain
         try:
             system = brain.system_prompt(brain.load_memory(), "ses")
@@ -162,7 +168,8 @@ class Live:
             "context_window_compression": {"sliding_window": {}},
             "session_resumption": {"handle": self._handle},
             "tools": self._tools(search),
-            "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
+            "speech_config": {**({"language_code": "tr-TR"} if lang else {}),
+                              "voice_config": {"prebuilt_voice_config": {"voice_name": VOICE_NAME}}},
             "input_audio_transcription": {},
             "output_audio_transcription": {},
             "realtime_input_config": {"automatic_activity_detection": {"silence_duration_ms": 700}},
@@ -229,11 +236,12 @@ class Live:
             last_err = None
             chosen = None
             for model in MODELS:                 # ilk bağlantı: çalışan model/arama birleşimini bul
-                for search in ([True, False] if SEARCH_ON else [False]):
+                for search, lang in [(s_, l_) for s_ in ([True, False] if SEARCH_ON else [False]) for l_ in (True, False)]:
                     try:
-                        session_cm = brain.gemini.aio.live.connect(model=model, config=self._config(search))
+                        session_cm = brain.gemini.aio.live.connect(model=model, config=self._config(search, lang))
                         session = await session_cm.__aenter__()
                         chosen = (model, search, session_cm, session)
+                        self._lang = lang
                         break
                     except Exception as e:  # noqa: BLE001
                         last_err = e
@@ -263,7 +271,7 @@ class Live:
                         raise
                     reconnects += 1
                     log.info("Canlı sohbet bağlantısı yenileniyor (%d): %s", reconnects, type(e).__name__)
-                    session_cm = brain.gemini.aio.live.connect(model=model, config=self._config(search))
+                    session_cm = brain.gemini.aio.live.connect(model=model, config=self._config(search, self._lang))
                     session = await session_cm.__aenter__()
         except Exception as e:  # noqa: BLE001
             self.error = str(e)[:200]
