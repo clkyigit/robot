@@ -389,6 +389,53 @@ class TV:
     async def _key(self, code: str, n: int = 1) -> None:
         await self._shell(" ; ".join([f"input keyevent {code}"] * max(1, min(n, 30))))
 
+    async def _ui(self) -> list[tuple[str, int, int]]:
+        """Ekrandaki yazılar ve ortalarının koordinatları (uiautomator)."""
+        out = await self._shell("uiautomator dump /sdcard/robot_ui.xml >/dev/null 2>&1; cat /sdcard/robot_ui.xml")
+        nodes = []
+        for m in re.finditer(r"<node [^>]*>", out):
+            n = m.group(0)
+            t = re.search(r' text="([^"]*)"', n)
+            d = re.search(r' content-desc="([^"]*)"', n)
+            b = re.search(r' bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', n)
+            label = ((t.group(1) if t else "") or (d.group(1) if d else "")).strip()
+            if label and b:
+                x1, y1, x2, y2 = map(int, b.groups())
+                nodes.append((label, (x1 + x2) // 2, (y1 + y2) // 2))
+        return nodes
+
+    async def _tap_text(self, match) -> str:
+        for label, x, y in await self._ui():
+            if match(label):
+                await self._shell(f"input tap {x} {y}")
+                return label
+        return ""
+
+    async def _tvplus_channel(self, num: str) -> str:
+        """TV+ ana ekranından 'Tüm kanallar'a girip kanalı yazısından bulup seçer."""
+        names = {k for k, n in TVPLUS_KANALLAR.items() if n == num}
+
+        def is_target(label: str) -> bool:
+            n = _norm(label)
+            if not n:
+                return False
+            if n in names or re.sub(r"(tv|hd)$", "", n) in names or re.sub(r"hd$", "", n) in names:
+                return True
+            return bool(re.match(rf"^{num}(?!\d)", n)) and len(n) > len(num)
+
+        for _ in range(8):                       # ana ekran gelsin
+            if await self._tap_text(lambda t: _norm(t) in ("tumkanallar", "tumkanallari", "kanallar", "canlitv")):
+                break
+            await asyncio.sleep(1.5)
+        await asyncio.sleep(3)
+        for _ in range(14):
+            hit = await self._tap_text(is_target)
+            if hit:
+                return hit
+            await self._shell(" ; ".join(["input keyevent KEYCODE_DPAD_DOWN"] * 4))
+            await asyncio.sleep(1)
+        return ""
+
     async def _tvplus_pkg(self) -> str:
         global TVPLUS_PKG
         if TVPLUS_PKG:
@@ -453,10 +500,21 @@ class TV:
                     await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 if not v:
                     return "📺 TV+ açılıyor."
-                await asyncio.sleep(10)         # uygulama ve canlı yayın açılsın
-                await self._shell(" ; ".join(f"input keyevent KEYCODE_{d}" for d in num) + " ; sleep 1 ; "
-                                  "input keyevent KEYCODE_DPAD_CENTER")
-                return f"📺 TV+ açıldı, {v} ({num}. kanal) seçiliyor."
+                await asyncio.sleep(6)
+                hit = await self._tvplus_channel(num)
+                if hit:
+                    return f"📺 TV+'ta {hit} açılıyor ({num}. kanal)."
+                await self._shell(" ; ".join(f"input keyevent KEYCODE_{d}" for d in num))   # son çare
+                return f"📺 TV+ açıldı ama {v} kanalını ekranda bulamadım; numarasını ({num}) tuşladım. '/tv ekran' ile bakabilirsin."
+            if a in ("ui", "yazilar", "yazılar"):
+                nodes = await self._ui()
+                return ("📺 Ekrandaki yazılar:\n" + "\n".join(f"{t}  ({x},{y})" for t, x, y in nodes[:80]))[:3900] \
+                    if nodes else "📺 Ekranda okunabilir yazı bulamadım (uiautomator boş döndü)."
+            if a in ("dokun", "tikla", "tıkla", "sec", "seç"):
+                hit = await self._tap_text(lambda t: _norm(v) in _norm(t))
+                return f"📺 '{hit}' seçildi." if hit else f"📺 Ekranda '{v}' yok."
+            if a in ("tus", "tuş", "key"):
+                await self._key("KEYCODE_" + v.upper().replace("KEYCODE_", ""), 1); return f"📺 {v.upper()} tuşu."
             if a in ("aktiviteler", "ekranlar"):
                 pkg = await self._tvplus_pkg() or v
                 out = await self._shell(f"dumpsys package {pkg}")
