@@ -34,6 +34,8 @@ horn_vida         = 2.2;  // ÖLÇ
 pi_yigin = 38;            // ÖLÇ: Pi + Active Cooler + M.2 HAT+
 plaka_t = 3;  pi_ayak = 5;
 pi_kart_z = plaka_t + pi_ayak;         // kartın alt yüzü
+// GPIO başlığı -x uzun kenarda (USB-C +x, USB/Ethernet +y). Pin 1 portların karşı ucunda.
+gpio_y0 = -42.5 + 7;  gpio_L = 51;     // ÖLÇ: başlığın y aralığı
 
 // ---------------- Ekran / kamera ------------------------------------
 ekran_pencere = 33;  ekran_kart = 39;  // ÖLÇ: kart çapı
@@ -98,6 +100,8 @@ module govde() {
         translate([-27, 38, pi_kart_z - 1]) cube([54, 30, 20]);
         // Pi USB-C (+x)
         translate([38, -31.3 - 6, pi_kart_z]) cube([30, 12, 9]);
+        // GPIO penceresi (-x): 40 pin başlığın hizası, dışarıdan jumper takılır
+        translate([-taban_R - 5, gpio_y0 - 4, pi_kart_z + 1]) cube([12, gpio_L + 8, 21]);
         // 12V kablo girişi (gövde arka)
         translate([30, 20, 62]) rotate([-90, 0, 0]) cylinder(d = 11, h = 40);
         // yan "hoparlör" ovalleri = havalandırma yarıkları (±x)
@@ -136,14 +140,17 @@ module alt_plaka() {
         cylinder(r = taban_R - duvar - bosluk, h = plaka_t);
         for (a = plaka_aci) rotate(a) translate([taban_R - 6, 0, -1]) {
             cylinder(d = 3.4, h = 5); cylinder(d1 = 6.6, d2 = 3.4, h = 1 + 1.8); }
+        // Pi vidaları: alttan M2.5, baş gömülü
+        for (x = [-24.5, 24.5], y = [-39, 19]) translate([x, y, -1]) {
+            cylinder(d = 2.9, h = plaka_t + 2); cylinder(d = 5.2, h = 1 + 1.6); }
         // dekor çentikler (modeldeki dört kertik)
         for (a = [45:90:315]) rotate(a) translate([taban_R - duvar - 4, -3, -1]) cube([6, 6, 1.6]);
         for (i = [-3:3]) translate([-20, i*8 - 2, -1]) cube([40, 4, plaka_t + 2]);
         for (a = [0:90:270]) rotate(a) translate([36, 0, -0.01]) cylinder(d = 10.5, h = 1.2);
     }
-    // Pi 5 ayakları (portlar +y): M2.5 insert
+    // Pi 5 ayakları (portlar +y): vida ALTTAN (dışarıdan) girer, HAT'ın ara direklerine vidalanır
     for (x = [-24.5, 24.5], y = [-39, 19]) translate([x, y, plaka_t - 0.01]) difference() {
-        cylinder(d = 6.5, h = pi_ayak); translate([0, 0, 1]) cylinder(d = 3.6, h = pi_ayak); }
+        cylinder(d = 6.5, h = pi_ayak); translate([0, 0, -5]) cylinder(d = 2.9, h = pi_ayak + 6); }
 }
 
 // =====================================================================
