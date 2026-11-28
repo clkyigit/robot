@@ -852,6 +852,8 @@ async def lifespan(_app: FastAPI):
         await tg.updater.start_polling()
     watcher = asyncio.create_task(camera.idle_watcher())
     asyncio.create_task(brain.self_test())  # açılışta modelleri bir kez dene
+    import home
+    asyncio.create_task(home.govee.scan(force=True))  # ışıkları açılışta kendisi bulsun
     live.on_turn = on_live_turn
     live.camera = camera
     live.screen_grab = screen_capture

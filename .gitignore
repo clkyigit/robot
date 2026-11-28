@@ -28,3 +28,6 @@ pi/models/
 pi/gunluk/
 pi/kimlik.md
 pi/.selfdev/
+
+# Govee cihaz önbelleği (ev ağı adresleri)
+pi/govee.json

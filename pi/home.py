@@ -9,6 +9,7 @@ TV: Ayarlar > Cihaz tercihleri > Hakkında > "Yapım numarası"na 7 kez bas (gel
 Ayarlar (.env):
   TV_IP=192.168.1.50           TV'nin ev ağındaki adresi (sabit IP verilmesi önerilir)
   GOVEE_NAMES=H8005A:tavan,H6099:tv    isteğe bağlı: model -> isim (konuşurken "tavan ışığı" diyebilmek için)
+  GOVEE_API_KEY=...            isteğe bağlı: LAN'da bulunamazsa Govee bulutu ile kontrol (Govee Home > Profil > ⚙️ > Apply for API Key)
 """
 
 import asyncio
@@ -88,53 +89,123 @@ def _msg(cmd: str, data: dict) -> bytes:
     return json.dumps({"msg": {"cmd": cmd, "data": data}}).encode()
 
 
+GOVEE_API_KEY = os.environ.get("GOVEE_API_KEY", "").strip()
+GOVEE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "govee.json")
+GOVEE_CLOUD = "https://openapi.api.govee.com/router/api/v1"
+
+
+def _local_ip() -> str:
+    """Robotun ev ağındaki adresi (paket göndermeden, yönlendirme tablosundan)."""
+    with contextlib.suppress(OSError), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    return ""
+
+
 class Govee:
+    """Işıkları kendisi bulur: çoklu yayın + genel yayın + tüm /24 ağa tek tek sorar; bulduklarını hatırlar.
+    Yerel ağda hiç bulamazsa ve GOVEE_API_KEY varsa Govee bulutu üzerinden kontrol eder."""
+
     def __init__(self) -> None:
         self.devices: dict[str, dict] = {}     # id -> {sku, ip, name}
+        self.cloud: dict[str, dict] = {}       # id -> {sku, name}
         self.scanned = 0.0
         self.error = ""
+        with contextlib.suppress(Exception):
+            with open(GOVEE_CACHE) as f:
+                self.devices = json.load(f)
+
+    def _save(self) -> None:
+        with contextlib.suppress(Exception):
+            with open(GOVEE_CACHE, "w") as f:
+                json.dump(self.devices, f)
 
     def _scan_sync(self, timeout: float) -> dict:
-        found = {}
+        found: dict[str, dict] = {}
+        me = _local_ip()
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         try:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             s.bind(("", LISTEN_PORT))
             s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            if me:
+                with contextlib.suppress(OSError):   # çoklu yayını Wi-Fi arayüzünden çıkar
+                    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(me))
+            msg = _msg("scan", {"account_topic": "reserve"})
+
+            def listen(until: float) -> None:
+                while time.time() < until:
+                    s.settimeout(max(0.05, until - time.time()))
+                    try:
+                        data, addr = s.recvfrom(4096)
+                    except (socket.timeout, OSError):
+                        return
+                    with contextlib.suppress(Exception):
+                        d = json.loads(data)["msg"]
+                        if d.get("cmd") == "scan":
+                            d = d["data"]
+                            sku = d.get("sku", "")
+                            found[d["device"].upper()] = {"sku": sku, "ip": d.get("ip") or addr[0],
+                                                          "name": NAMES.get(sku, sku)}
+
+            targets = [GOVEE_MCAST, "255.255.255.255"]
+            if me:
+                targets.append(me.rsplit(".", 1)[0] + ".255")
             for _ in range(2):
-                s.sendto(_msg("scan", {"account_topic": "reserve"}), (GOVEE_MCAST, SCAN_PORT))
-            end = time.time() + timeout
-            while time.time() < end:
-                s.settimeout(max(0.05, end - time.time()))
-                try:
-                    data, addr = s.recvfrom(4096)
-                except socket.timeout:
-                    break
-                with contextlib.suppress(Exception):
-                    d = json.loads(data)["msg"]
-                    if d.get("cmd") == "scan":
-                        d = d["data"]
-                        sku = d.get("sku", "")
-                        found[d["device"].upper()] = {"sku": sku, "ip": d.get("ip") or addr[0],
-                                                      "name": NAMES.get(sku, sku)}
+                for t in targets:
+                    with contextlib.suppress(OSError):
+                        s.sendto(msg, (t, SCAN_PORT))
+            listen(time.time() + timeout)
+            if not found and me:                    # yönlendirici çoklu yayını yutuyorsa: herkese tek tek sor
+                base = me.rsplit(".", 1)[0]
+                for i in range(1, 255):
+                    with contextlib.suppress(OSError):
+                        s.sendto(msg, (f"{base}.{i}", SCAN_PORT))
+                listen(time.time() + timeout)
         finally:
             s.close()
         return found
 
-    async def scan(self, force: bool = False) -> dict:
-        if force or not self.devices or time.time() - self.scanned > 600:
+    def _cloud_sync(self, path: str, body: dict | None = None) -> dict:
+        import urllib.request
+        req = urllib.request.Request(GOVEE_CLOUD + path, method="POST" if body else "GET",
+                                     data=json.dumps(body).encode() if body else None,
+                                     headers={"Govee-API-Key": GOVEE_API_KEY, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read() or b"{}")
+
+    async def _cloud_list(self) -> dict:
+        if not GOVEE_API_KEY:
+            return {}
+        if not self.cloud:
             try:
-                found = await asyncio.to_thread(self._scan_sync, 2.5)
-                if found or force:
+                out = await asyncio.to_thread(self._cloud_sync, "/user/devices")
+                for d in out.get("data") or []:
+                    self.cloud[d["device"]] = {"sku": d.get("sku", ""),
+                                               "name": d.get("deviceName") or NAMES.get(d.get("sku", ""), d.get("sku", ""))}
+            except Exception as e:  # noqa: BLE001
+                self.error = f"Govee bulut: {e}"
+        return self.cloud
+
+    async def scan(self, force: bool = False) -> dict:
+        if force or not self.scanned or time.time() - self.scanned > 600:
+            try:
+                found = await asyncio.to_thread(self._scan_sync, 2.0)
+                if found:
                     self.devices = found
+                    self._save()
                 self.scanned, self.error = time.time(), ""
             except OSError as e:
                 self.error = str(e)
-        return self.devices
+                self.scanned = time.time()
+        if not self.devices:
+            await self._cloud_list()
+        return self.devices or {k: {**v, "ip": "bulut"} for k, v in self.cloud.items()}
 
-    def _pick(self, which: str) -> list[dict]:
+    def _pick(self, which: str, pool: list[dict] | None = None) -> list[dict]:
         w = (which or "").lower().strip()
-        devs = list(self.devices.values())
+        devs = pool if pool is not None else list(self.devices.values())
         if not w or w in ("hepsi", "tümü", "tum", "tüm", "bütün", "ışıklar", "isiklar", "all"):
             return devs
         sel = [d for d in devs if w in d["name"].lower() or w in d["sku"].lower()]
@@ -144,13 +215,53 @@ class Govee:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.sendto(payload, (ip, CMD_PORT))
 
+    async def _cloud_command(self, a: str, v: str, which: str, value: str) -> str:
+        if a in ("ac", "aç", "on", "kapat", "kapa", "off"):
+            cap, desc = ("devices.capabilities.on_off", "powerSwitch", 0 if a in ("kapat", "kapa", "off") else 1), \
+                ("kapattım" if a in ("kapat", "kapa", "off") else "açtım")
+        elif a in ("parlaklik", "parlaklık", "brightness"):
+            n = max(1, min(100, int(re.sub(r"\D", "", v) or 50)))
+            cap, desc = ("devices.capabilities.range", "brightness", n), f"parlaklığı %{n} yaptım"
+        elif a in ("renk", "color"):
+            rgb = RENKLER.get(v)
+            if not rgb and re.fullmatch(r"#?[0-9a-f]{6}", v):
+                h = v.lstrip("#")
+                rgb = tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+            if not rgb:
+                return f"'{value}' rengini bilmiyorum. Bildiklerim: {', '.join(sorted(set(RENKLER)))}"
+            cap, desc = ("devices.capabilities.color_setting", "colorRgb",
+                         (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]), f"rengi {value} yaptım"
+        elif a in ("beyaz", "sicaklik", "sıcaklık", "kelvin"):
+            k = max(2000, min(9000, SICAKLIK.get(v) or int(re.sub(r"\D", "", v) or 4000)))
+            cap, desc = ("devices.capabilities.color_setting", "colorTemperatureK", k), f"beyaz ışığı {k} K yaptım"
+        else:
+            return f"Bu komut ({a}) bulut üzerinden desteklenmiyor; yerel ağ (LAN Control) gerekli."
+        pool = [{"id": i, **d} for i, d in self.cloud.items()]
+        targets = self._pick(which, pool)
+        bad = []
+        for d in targets:
+            import uuid
+            body = {"requestId": str(uuid.uuid4()), "payload": {"sku": d["sku"], "device": d["id"], "capability":
+                    {"type": cap[0], "instance": cap[1], "value": cap[2]}}}
+            try:
+                await asyncio.to_thread(self._cloud_sync, "/device/control", body)
+            except Exception:  # noqa: BLE001
+                bad.append(d["name"])
+        ok = [d["name"] for d in targets if d["name"] not in bad]
+        return (f"💡 {', '.join(ok)}: {desc} (bulut)." if ok else "") + \
+            (f" ⚠️ Ulaşamadım: {', '.join(bad)}." if bad else "")
+
     async def command(self, action: str, value: str = "", which: str = "") -> str:
         await self.scan()
         if not self.devices:
             await self.scan(force=True)
+        if not self.devices and self.cloud:
+            return await self._cloud_command((action or "").lower().strip(), (value or "").lower().strip(),
+                                             which, value)
         if not self.devices:
-            return ("Govee ışık bulamadım. Govee Home'da her cihaz için 'LAN Control' açık mı, robotla aynı "
-                    "Wi-Fi'da mı?" + (f" ({self.error})" if self.error else ""))
+            return ("Govee ışıkları ağda bulamadım (tüm ağı da taradım). Govee Home > cihaz > ⚙️ > 'LAN Control' "
+                    "açık mı, ışıklar robotla aynı Wi-Fi'da mı? Alternatif: Govee API anahtarı ekle (GOVEE_API_KEY), "
+                    "o zaman internet üzerinden ulaşırım." + (f" ({self.error})" if self.error else ""))
         a, v = (action or "").lower().strip(), (value or "").lower().strip()
         if a in ("ac", "aç", "on"):
             payload, desc = _msg("turn", {"value": 1}), "açtım"
