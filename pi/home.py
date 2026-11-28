@@ -310,6 +310,7 @@ class Govee:
 class TV:
     def __init__(self) -> None:
         self.error = ""
+        self._focus = None
 
     async def _adb(self, *args: str, timeout: float = 15) -> str:
         p = await asyncio.create_subprocess_exec("adb", *args, stdout=asyncio.subprocess.PIPE,
@@ -393,8 +394,13 @@ class TV:
         """Ekrandaki yazılar ve ortalarının koordinatları (uiautomator)."""
         out = await self._shell("uiautomator dump /sdcard/robot_ui.xml >/dev/null 2>&1; cat /sdcard/robot_ui.xml")
         nodes = []
+        self._focus = None
         for m in re.finditer(r"<node [^>]*>", out):
             n = m.group(0)
+            if ' focused="true"' in n:
+                fb = re.search(r' bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', n)
+                if fb:
+                    self._focus = tuple(map(int, fb.groups()))
             t = re.search(r' text="([^"]*)"', n)
             d = re.search(r' content-desc="([^"]*)"', n)
             b = re.search(r' bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', n)
@@ -403,6 +409,31 @@ class TV:
                 x1, y1, x2, y2 = map(int, b.groups())
                 nodes.append((label, (x1 + x2) // 2, (y1 + y2) // 2))
         return nodes
+
+    async def _select(self, match, tries: int = 25) -> str:
+        """Kumanda gibi seç: odağı ok tuşlarıyla hedef yazıya götürür, sonra OK'a basar.
+        (TV uygulamaları dokunmaya çoğu zaman tepki vermez.)"""
+        for _ in range(tries):
+            nodes = await self._ui()
+            tgt = next(((t, x, y) for t, x, y in nodes if match(t)), None)
+            if not tgt:
+                return ""
+            f = self._focus
+            if f and f[0] <= tgt[1] <= f[2] and f[1] <= tgt[2] <= f[3]:
+                await self._shell("input keyevent KEYCODE_DPAD_CENTER")
+                return tgt[0]
+            if not f:
+                await self._shell("input keyevent KEYCODE_DPAD_DOWN")
+                continue
+            fx, fy = (f[0] + f[2]) // 2, (f[1] + f[3]) // 2
+            dx, dy = tgt[1] - fx, tgt[2] - fy
+            if abs(dy) > (f[3] - f[1]) // 2 and (abs(dy) >= abs(dx) or abs(dx) < (f[2] - f[0]) // 2):
+                key = "DOWN" if dy > 0 else "UP"
+            else:
+                key = "RIGHT" if dx > 0 else "LEFT"
+            await self._shell(f"input keyevent KEYCODE_DPAD_{key}")
+            await asyncio.sleep(0.4)
+        return ""
 
     async def _tap_text(self, match) -> str:
         for label, x, y in await self._ui():
@@ -425,7 +456,8 @@ class TV:
             cands = [(t, x, y) for t, x, y in nodes if _norm(t) and not any(k in _norm(t) for k in skip)]
             pick = next((c for c in cands if want and want in _norm(c[0])), cands[0] if cands else None)
             if pick:
-                await self._shell(f"input tap {pick[1]} {pick[2]}")
+                if not await self._select(lambda t: t == pick[0], tries=8):
+                    await self._shell("input keyevent KEYCODE_DPAD_CENTER")   # odak zaten ilk profilde
                 await asyncio.sleep(4)
                 return True
             return False
@@ -454,19 +486,18 @@ class TV:
                 continue
             hit = next(((t, x, y) for n, t, x, y in norms if is_target(t)), None)
             if hit and done_live:
-                await self._shell(f"input tap {hit[1]} {hit[2]}")
-                await asyncio.sleep(1)
-                await self._shell("input keyevent KEYCODE_DPAD_CENTER")
-                return hit[0]
+                got = await self._select(is_target, tries=40)
+                if got:
+                    return got
             live = next(((x, y) for n, t, x, y in norms if n in ("canlitv", "canli", "canliyayin")), None)
             if live and not done_live:
-                await self._shell(f"input tap {live[0]} {live[1]}")
+                await self._select(lambda t: _norm(t) in ("canlitv", "canli", "canliyayin"))
                 done_live = True
                 await asyncio.sleep(3)
                 continue
             lst = next(((x, y) for n, t, x, y in norms if n in ("kanallar", "tumkanallar", "tumkanallari")), None)
             if lst and done_live and not done_list:
-                await self._shell(f"input tap {lst[0]} {lst[1]}")
+                await self._select(lambda t: _norm(t) in ("kanallar", "tumkanallar", "tumkanallari"))
                 done_list = True
                 await asyncio.sleep(3)
                 continue
@@ -559,10 +590,11 @@ class TV:
                 return f"📺 TV+ açıldı ama {v} kanalını ekranda bulamadım; numarasını ({num}) tuşladım. '/tv ekran' ile bakabilirsin."
             if a in ("ui", "yazilar", "yazılar"):
                 nodes = await self._ui()
-                return ("📺 Ekrandaki yazılar:\n" + "\n".join(f"{t}  ({x},{y})" for t, x, y in nodes[:80]))[:3900] \
+                return ("📺 Ekrandaki yazılar (odak: " + str(self._focus) + "):\n" +
+                        "\n".join(f"{t}  ({x},{y})" for t, x, y in nodes[:80]))[:3900] \
                     if nodes else "📺 Ekranda okunabilir yazı bulamadım (uiautomator boş döndü)."
             if a in ("dokun", "tikla", "tıkla", "sec", "seç"):
-                hit = await self._tap_text(lambda t: _norm(v) in _norm(t))
+                hit = await self._select(lambda t: _norm(v) in _norm(t))
                 return f"📺 '{hit}' seçildi." if hit else f"📺 Ekranda '{v}' yok."
             if a in ("tus", "tuş", "key"):
                 await self._key("KEYCODE_" + v.upper().replace("KEYCODE_", ""), 1); return f"📺 {v.upper()} tuşu."
