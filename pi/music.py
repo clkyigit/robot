@@ -62,16 +62,27 @@ class Music:
         return best.get("title") or query, best["url"]
 
     async def _start(self, url: str, start: float = 0.0) -> bool:
+        """Önce ayarlı ALSA cihazını, olmazsa PipeWire/Pulse/varsayılan çıkışı dener."""
+        for ao in (["--ao=alsa", f"--audio-device=alsa/{DEVICE}"], ["--ao=pipewire,pulse,alsa"]):
+            if await self._start_with(url, start, ao):
+                return True
+            log.warning("mpv %s ile açılamadı: %s", ao, self.error)
+        return False
+
+    async def _start_with(self, url: str, start: float, ao: list) -> bool:
+        with contextlib.suppress(OSError):
+            open("/tmp/robot-mpv.log", "w").close()
         with contextlib.suppress(FileNotFoundError):
             os.unlink(SOCK)
         args = ["mpv", "--no-video", "--no-ytdl", "--no-terminal", "--msg-level=all=error",
-                f"--log-file=/tmp/robot-mpv.log", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}",
-                "--ao=alsa", f"--audio-device=alsa/{DEVICE}"]
+                f"--log-file=/tmp/robot-mpv.log", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}", *ao]
         if start > 1:
             args.append(f"--start={start:.1f}")
         args.append(url)
         self.proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL,
                                                          stderr=asyncio.subprocess.PIPE)
+        with contextlib.suppress(FileNotFoundError):
+            pass
         await asyncio.sleep(3)
         if not self.playing():
             err = (await self.proc.stderr.read()).decode(errors="ignore").strip()
