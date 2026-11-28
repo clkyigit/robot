@@ -822,6 +822,9 @@ TOOLS = [
             "soru": {"type": "string", "description": "Fotoğrafta neye dikkat edileceği"}},
             "required": ["soru"]},
     },
+    *[{"name": t["name"], "description": t["description"],
+       "input_schema": {"type": "object", "properties": t["params"], "required": t["required"]}}
+      for t in (__import__("home").TOOL_ISIK, __import__("home").TOOL_TV)],
     {
         "name": "sarki_cal",
         "description": "İnternette (YouTube) şarkıyı arar ve robotun hoparlöründen çalar. Sahibin bir şarkı, "
@@ -885,6 +888,9 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
             return "Kamera çalışmadı."
         await send_photo(img)
         return await describe_image(img, args.get("soru", "Ne görüyorsun?"))
+    if name in ("isik", "tv"):
+        import home
+        return await home.run(name, args)
     if name == "sarki_cal":
         from music import music
         return await music.play(str(args.get("sorgu", "")))

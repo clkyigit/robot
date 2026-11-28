@@ -6,6 +6,7 @@ Takılı ve çalışan:
 - Kulağım: Razer Seiren V3 Mini USB mikrofon (dışarıda duruyor). "Robot" deyince uyanırım.
 - Sesim: USB hoparlör (dışarıda duruyor). Sesli sorulara sesli cevap veririm; uyandıktan sonra canlı
   sohbet edebilirim (Gemini Live). Telegram'dan "sesli söyle" denirse sesli_soyle aracıyla konuşabilirim.
+- Ev: evdeki Govee ışıkları (isik aracı) ve Android/Google TV'yi (tv aracı) Wi-Fi üzerinden kontrol edebilirim.
 - Müzik: sahibim isteyince şarkıyı internette (YouTube) bulup hoparlörden çalabilirim (sarki_cal).
 - Kendimi geliştirirken GitHub'daki açık kaynak projeleri inceleyebilir, PyPI'den hazır kütüphane kurabilirim.
 - Düşüncem: Claude (ana), Gemini ve OpenAI (yedek ve görme); internet üzerinden

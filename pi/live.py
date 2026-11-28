@@ -196,6 +196,10 @@ class Live:
         })
         funcs.append({"name": "muzigi_durdur", "description": "Çalan müziği durdurur.",
                       "parameters": {"type": "object", "properties": {}}})
+        import home
+        for t in (home.TOOL_ISIK, home.TOOL_TV):
+            funcs.append({"name": t["name"], "description": t["description"],
+                          "parameters": {"type": "object", "properties": t["params"], "required": t["required"]}})
         if self.screen_grab:
             funcs.append({
                 "name": "ekrana_bak",
@@ -316,6 +320,9 @@ class Live:
                 elif fc.name == "muzigi_durdur":
                     from music import music
                     result = await music.stop()
+                elif fc.name in ("isik", "tv"):
+                    import home
+                    result = await home.run(fc.name, dict(fc.args or {}))
                 elif fc.name != "ekrana_bak":
                     result = f"Bilinmeyen araç: {fc.name}"
                 else:

@@ -507,6 +507,33 @@ def build_telegram():
         await update.message.reply_text("🎵 Arıyorum...")
         await update.message.reply_text("🎵 " + await music.play(" ".join(args)))
 
+    async def cmd_isik(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/isik ac · kapat · renk mavi · parlaklik 40 · beyaz sıcak · senkron · tara"""
+        if not await guard(update):
+            return
+        import home
+        a = context.args or []
+        if not a or a[0] == "tara":
+            devs = await home.govee.scan(force=True)
+            names = ", ".join(f"{d['name']} ({d['ip']})" for d in devs.values()) or "bulunamadı"
+            await update.message.reply_text(f"💡 Govee ışıklar: {names}\nKullanım: /isik ac · kapat · renk mavi · "
+                                            "parlaklik 40 · beyaz sıcak · senkron")
+            return
+        act = "tv_senkron" if a[0] == "senkron" else a[0]
+        await update.message.reply_text(await home.govee.command(act, " ".join(a[1:])))
+
+    async def cmd_tv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/tv ac · kapat · ses_ac 5 · ses_kis · sessiz · uygulama netflix · youtube <arama> · ev · geri"""
+        if not await guard(update):
+            return
+        import home
+        a = context.args or []
+        if not a:
+            await update.message.reply_text("📺 Kullanım: /tv ac · kapat · ses_ac 5 · ses_kis 3 · sessiz · "
+                                            "uygulama netflix · youtube <arama> · ev · geri")
+            return
+        await update.message.reply_text(await home.tv.command(a[0], " ".join(a[1:])))
+
     async def cmd_dur(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await guard(update):
             await update.message.reply_text("⏹ " + await music.stop())
@@ -550,6 +577,8 @@ def build_telegram():
     app.add_handler(CommandHandler("ekran", cmd_ekran))
     app.add_handler(CommandHandler("cal", cmd_cal))
     app.add_handler(CommandHandler("dur", cmd_dur))
+    app.add_handler(CommandHandler("isik", cmd_isik))
+    app.add_handler(CommandHandler("tv", cmd_tv))
     app.add_handler(CommandHandler("esle", cmd_esle))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
