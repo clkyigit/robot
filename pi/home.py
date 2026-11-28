@@ -27,8 +27,44 @@ GOVEE_MCAST, SCAN_PORT, LISTEN_PORT, CMD_PORT = "239.255.255.250", 4001, 4002, 4
 TV_IP = os.environ.get("TV_IP", "").strip()
 TVPLUS_PKG = os.environ.get("TVPLUS_PKG", "").strip()
 # Kanal adı -> TV+ kanal numarası. Numaralar pakete göre değişir; .env'de TVPLUS_KANALLAR ile düzeltilebilir.
-TVPLUS_KANALLAR = {k.strip().lower(): v.strip() for k, v in
-                   (p.split(":", 1) for p in os.environ.get("TVPLUS_KANALLAR", "").split(",") if ":" in p)}
+# Sahibinin TV+ kanal listesinden (Kasım 2026 ekran görüntüleri). .env TVPLUS_KANALLAR ile değiştirilebilir/eklenebilir.
+_KANAL_LISTESI = """
+11 sinemaaksiyon, 12 sinemakomedi, 13 sinemaaile, 14 sinema1001, 15 sinemayerli2, 16 sinema2,
+17 sinemaaksiyon2, 18 sinemaaile2, 19 sinema1002, 20 cosmo, 21 trt1, 22 kanald, 23 star, 24 atv, 25 show,
+26 now|fox, 27 tv8, 30 tlc, 31 cnbce, 32 teve2|tv2, 34 kanal7, 36 beyaz, 37 tv100, 38 flash, 39 dmax, 40 bizimev,
+41 tv85, 42 gzt, 45 tv4, 46 as, 47 ekol, 48 turkhaber, 49 cnnturk|cnn, 50 ntv, 51 haberturk, 52 ahaber,
+53 trthaber, 54 24|yirmidort, 55 bloomberg|bloomberght, 56 apara, 57 halk, 58 tele1, 59 haberglobal,
+60 ekoturk, 61 ulke, 62 tgrthaber|tgrt, 63 tvnet, 64 akit, 65 benguturk, 66 ulusal, 67 krt, 68 tv5, 69 szc|sozcu,
+70 trtspor, 71 trtsporyildiz, 73 htspor, 74 fbtv, 75 tabiispor|tabii, 77 ssport, 78 ssport2, 79 eurosport|eurosport1,
+80 eurosport2, 92 sportstv|sports, 94 ekstra|ekstratv, 95 trtbelgesel, 96 tarih, 97 explore|viasatexplore
+"""
+
+
+def _norm(name: str) -> str:
+    t = name.lower().translate(str.maketrans("ıİşŞğĞüÜöÖçÇâ", "iissgguuoocca"))
+    return re.sub(r"[^a-z0-9]", "", t)
+
+
+TVPLUS_KANALLAR: dict[str, str] = {}
+for _item in _KANAL_LISTESI.replace("\n", " ").split(","):
+    _item = _item.strip()
+    if _item:
+        _num, _names = _item.split(" ", 1)
+        for _n in _names.split("|"):
+            TVPLUS_KANALLAR[_norm(_n)] = _num
+TVPLUS_KANALLAR.update({_norm(k): v.strip() for k, v in
+                        (p.split(":", 1) for p in os.environ.get("TVPLUS_KANALLAR", "").split(",") if ":" in p)})
+
+
+def kanal_no(name: str) -> str:
+    n = _norm(name)
+    if n.isdigit():
+        return n
+    for cand in (n, re.sub(r"(kanali|kanal|tv|hd)$", "", n), re.sub(r"(kanali|kanal|hd)$", "", n),
+                 re.sub(r"^(kanal)", "kanal", n)):
+        if cand in TVPLUS_KANALLAR:
+            return TVPLUS_KANALLAR[cand]
+    return ""
 NAMES = dict(p.split(":", 1) for p in os.environ.get("GOVEE_NAMES", "").split(",") if ":" in p)
 
 RENKLER = {
@@ -244,12 +280,10 @@ class TV:
                 await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 if not v:
                     return "📺 TV+ açılıyor."
-                num = v if v.isdigit() else TVPLUS_KANALLAR.get(v.lower().replace(" ", ""), "") or \
-                    TVPLUS_KANALLAR.get(v.lower(), "")
+                num = kanal_no(v)
                 if not num:
-                    known = ", ".join(f"{k}={n}" for k, n in TVPLUS_KANALLAR.items()) or "henüz tanımlı kanal yok"
-                    return (f"📺 TV+ açılıyor, ama '{v}' kanalının numarasını bilmiyorum ({known}). Numarayla söyle "
-                            "ya da .env'e ekle: TVPLUS_KANALLAR=trt1:1,show:5")
+                    return (f"📺 TV+ açılıyor, ama '{v}' kanalını listemde bulamadım. Numarasıyla söyle "
+                            "(örn. 'TV+ 25') ya da .env'e ekle: TVPLUS_KANALLAR=kanaladi:numara")
                 await asyncio.sleep(8)          # uygulama ve canlı yayın açılsın
                 await self._shell(" ; ".join(f"input keyevent KEYCODE_{d}" for d in num) + " ; sleep 1 ; "
                                   "input keyevent KEYCODE_DPAD_CENTER")
@@ -303,7 +337,8 @@ TOOL_TV = {
     "description": "Evdeki Android/Google TV'yi kontrol eder. eylem: ac, kapat, ses_ac, ses_kis (deger: kaç kademe), "
                    "sessiz, duraklat, ev, geri, uygulama (deger: youtube, netflix, prime, disney, spotify, tabii, "
                    "blutv, exxen...), youtube (deger: video adı; ilk sonucu TV'de oynatır), youtube_ara (deger: "
-                   "arama; TV'de YouTube arama sonuçlarını gösterir), tvplus (deger: kanal adı ya da numarası; "
+                   "arama; TV'de YouTube arama sonuçlarını gösterir), tvplus (deger: kanal adı ya da numarası, "
+                   "örn. TRT 1, Show, Kanal D, NTV, Habertürk, S Sport, TRT Spor; "
                    "TV+ uygulamasını açıp o kanala geçer, deger boşsa sadece açar).",
     "params": {"eylem": {"type": "string"}, "deger": {"type": "string"}},
     "required": ["eylem"],
