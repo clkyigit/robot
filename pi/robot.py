@@ -31,6 +31,7 @@ from camera import camera  # noqa: E402
 from ears import ears, has_wake, strip_wake  # noqa: E402
 from voice import voice  # noqa: E402
 from live import live  # noqa: E402
+from music import music  # noqa: E402
 import body  # noqa: E402
 from initiative import initiative  # noqa: E402
 from gaze import gaze  # noqa: E402
@@ -192,6 +193,17 @@ def build_telegram():
         if _READ_LAST.match(text or "") and LAST_REPLY:
             await update.message.reply_text("🔊 Okuyorum.")
             speak_later(update, LAST_REPLY)
+            return
+        # "... çal" / "müziği durdur": hangi model olursa olsun doğrudan müzik çalar
+        m = _MUSIC_PLAY.match(text or "")
+        if m:
+            q = (m.group(1) or m.group(2) or "").strip()
+            await update.message.reply_text("🎵 Arıyorum...")
+            LAST_REPLY = await music.play(q)
+            await update.message.reply_text("🎵 " + LAST_REPLY)
+            return
+        if _MUSIC_STOP.match(text or ""):
+            await update.message.reply_text("⏹ " + await music.stop())
             return
         # "ekranıma bak", "ekranımda ne var" gibi istek: hangi model olursa olsun doğrudan laptopa sor
         if _SCREEN_ASK.search(text or ""):
@@ -479,6 +491,26 @@ def build_telegram():
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
         await reply_long(update, await screen_look(question))
 
+    async def cmd_cal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/cal ŞARKI: internetten bulup çalar · /cal ses 40: ses seviyesi"""
+        if not await guard(update):
+            return
+        args = context.args or []
+        if len(args) == 2 and args[0].lower() == "ses" and args[1].isdigit():
+            await update.message.reply_text("🔊 " + await music.set_volume(int(args[1])))
+            return
+        if not args:
+            st = music.status()
+            await update.message.reply_text(f"🎵 Şu an: {st['title'] or 'bir şey çalmıyor'} (ses %{st['volume']})\n"
+                                            "Kullanım: /cal şarkı adı · /dur · /cal ses 40")
+            return
+        await update.message.reply_text("🎵 Arıyorum...")
+        await update.message.reply_text("🎵 " + await music.play(" ".join(args)))
+
+    async def cmd_dur(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if await guard(update):
+            await update.message.reply_text("⏹ " + await music.stop())
+
     async def cmd_durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await guard(update):
             return
@@ -488,6 +520,8 @@ def build_telegram():
         lines.append(ears_line())
         lines.append(voice_line())
         lines.append(live_line())
+        st = music.status()
+        lines.append(f"🎵 Müzik: {st['title'] or 'çalmıyor'} (ses %{st['volume']})" + (f", son hata: {st['error']}" if st["error"] else ""))
         lines.append(oto_line())
         lines.append(selfdev_line())
         await update.message.reply_text("\n".join(lines))
@@ -514,6 +548,8 @@ def build_telegram():
     app.add_handler(CommandHandler("ses", cmd_ses))
     app.add_handler(CommandHandler("canli", cmd_canli))
     app.add_handler(CommandHandler("ekran", cmd_ekran))
+    app.add_handler(CommandHandler("cal", cmd_cal))
+    app.add_handler(CommandHandler("dur", cmd_dur))
     app.add_handler(CommandHandler("esle", cmd_esle))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -537,6 +573,8 @@ _VOICE_ASK = re.compile(r"\b(sesli|sesle|konuş|oku bana|seslendir|hoparlör)", 
 
 _READ_LAST = re.compile(r"^\W*(sesli\s+)?(oku|okur musun|söyle|tekrar\s+(et|oku|söyle)|sesli\s+söyle)\W*$", re.IGNORECASE)
 LAST_REPLY = ""
+_MUSIC_PLAY = re.compile(r"^\W*(?:(?:şarkı|müzik|şarkıyı)\s+(?:çal|aç)\s*:?\s*(.+)|(.+?)\s+(?:şarkısını\s+|şarkısı\s+)?(?:çal|çalar\s*mısın|aç\s+bana))\W*$", re.IGNORECASE)
+_MUSIC_STOP = re.compile(r"^\W*(müziği|şarkıyı)?\s*(durdur|kapat|sustur|kes)\W*$", re.IGNORECASE)
 _SCREEN_ASK = re.compile(r"(ekran(ım|ıma|ımda|ımdaki|a|da)?\b.*\b(bak|gör|ne var|oku))|laptop(um|uma|umda)?\b.*\bbak",
                          re.IGNORECASE)
 
@@ -668,7 +706,8 @@ async def on_heard(wav: bytes) -> None:
 async def on_live(preroll: bytes, pending: list) -> None:
     """Uyandırma kelimesi duyuldu: canlı sesli sohbet (Gemini Live). Açılamazsa eski yönteme düşer."""
     brain.set_face("mutlu", 3)
-    ok = await live.run(preroll, ears, pending)
+    async with music.ducked():          # konuşurken müzik susar, sonra kaldığı yerden devam eder
+        ok = await live.run(preroll, ears, pending)
     if not ok:
         log.warning("Canlı sohbet açılamadı, eski yönteme geçiyorum: %s", live.error)
         audio = preroll + b"".join(pending)

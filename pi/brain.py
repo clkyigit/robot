@@ -823,6 +823,18 @@ TOOLS = [
             "required": ["soru"]},
     },
     {
+        "name": "sarki_cal",
+        "description": "İnternette (YouTube) şarkıyı arar ve robotun hoparlöründen çalar. Sahibin bir şarkı, "
+                       "sanatçı ya da tür isterse kullan.",
+        "input_schema": {"type": "object", "properties": {
+            "sorgu": {"type": "string", "description": "Şarkı adı ve/veya sanatçı"}}, "required": ["sorgu"]},
+    },
+    {
+        "name": "muzigi_durdur",
+        "description": "Robotun hoparlöründe çalan müziği durdurur.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "sesli_soyle",
         "description": "Hoparlöründen sesli konuşur (USB hoparlör). Sahibin Telegram'dan 'sesli söyle', 'sesli oku', "
                        "'konuş' gibi bir şey isterse ya da bir şeyi duyurman gerekirse kullan. Okunacak metni kısa ve "
@@ -873,6 +885,12 @@ async def run_tool(name: str, args: dict, mem: dict, take_photo: TakePhoto, send
             return "Kamera çalışmadı."
         await send_photo(img)
         return await describe_image(img, args.get("soru", "Ne görüyorsun?"))
+    if name == "sarki_cal":
+        from music import music
+        return await music.play(str(args.get("sorgu", "")))
+    if name == "muzigi_durdur":
+        from music import music
+        return await music.stop()
     if name == "sesli_soyle":
         from voice import voice
         if not voice.enabled:

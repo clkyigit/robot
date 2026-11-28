@@ -10,7 +10,7 @@ OLD="$HOME/robot"
 cd "$DIR"
 
 echo "== 1/5 Sistem paketleri =="
-sudo apt install -y python3-venv python3-picamera2 python3-opencv espeak-ng alsa-utils
+sudo apt install -y python3-venv python3-picamera2 python3-opencv espeak-ng alsa-utils mpv
 
 echo "== 2/5 Python ortamı =="
 if [ ! -d venv ]; then

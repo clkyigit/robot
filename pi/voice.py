@@ -139,7 +139,8 @@ class Voice:
         t = speakable(text)
         if not t:
             return False
-        async with self._lock:
+        from music import music
+        async with self._lock, music.ducked():
             fd, path = tempfile.mkstemp(suffix=".wav", prefix="robot-ses-")
             os.close(fd)
             try:

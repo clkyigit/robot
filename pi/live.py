@@ -12,6 +12,8 @@ Ayarlar (.env):
   LIVE=1                         0 yaparsan eski yöntem: kaydet -> yazıya çevir -> düşün -> seslendir
   GEMINI_LIVE_MODEL=gemini-3.8-live
   LIVE_VOICE=Kore                Gemini ses tonu (AI Studio'da dinlenebilir)
+  LIVE_FOLLOWUP=0                0: her soru için "robot" demek gerekir (cevaptan sonra dinlemeyi bırakır)
+                                 1: cevaptan sonra LIVE_IDLE_S saniye kelimesiz sohbet sürer
   LIVE_IDLE_S=8                  son konuşmadan sonra bu kadar sessizlikte oturum kapanır
   LIVE_SPEECH_RMS=500            mikrofon bu seviyeyi geçerse "konuşuyor" sayılır
   LIVE_BARGE_IN=0                1: robot konuşurken de mikrofon açık (araya girebilirsin)
@@ -35,6 +37,7 @@ MODELS = [m.strip() for m in (os.environ.get("GEMINI_LIVE_MODEL", "") +
 MODELS = list(dict.fromkeys(MODELS))
 VOICE_NAME = os.environ.get("LIVE_VOICE", "Kore").strip()
 IDLE_S = float(os.environ.get("LIVE_IDLE_S", "8"))
+FOLLOWUP = os.environ.get("LIVE_FOLLOWUP", "0").strip() == "1"
 SPEECH_RMS = float(os.environ.get("LIVE_SPEECH_RMS", "500"))
 BARGE_IN = os.environ.get("LIVE_BARGE_IN", "0").strip() == "1"
 DEVICE = os.environ.get("SPEAKER_DEVICE", "default").strip()
@@ -177,6 +180,15 @@ class Live:
                 "parameters": {"type": "object", "properties": {
                     "sorgu": {"type": "string", "description": "Ne aranacak (Türkçe, kısa)"}}, "required": ["sorgu"]},
             })
+        funcs.append({
+            "name": "sarki_cal",
+            "description": "İnternette (YouTube) şarkıyı arar ve hoparlörden çalar. Sahibin bir şarkı, sanatçı ya "
+                           "da tür isterse kullan (örn. 'Barış Manço Dağlar Dağlar', 'sakin piyano müziği').",
+            "parameters": {"type": "object", "properties": {
+                "sorgu": {"type": "string", "description": "Şarkı adı ve/veya sanatçı"}}, "required": ["sorgu"]},
+        })
+        funcs.append({"name": "muzigi_durdur", "description": "Çalan müziği durdurur.",
+                      "parameters": {"type": "object", "properties": {}}})
         if self.screen_grab:
             funcs.append({
                 "name": "ekrana_bak",
@@ -289,6 +301,13 @@ class Live:
                 if fc.name == "internette_ara":
                     import brain
                     result = await brain.web_search(str((fc.args or {}).get("sorgu", "")))
+                elif fc.name == "sarki_cal":
+                    from music import music
+                    result = await music.play(str((fc.args or {}).get("sorgu", "")))
+                    result += " (Sohbet bitince başlayacak; kısaca haber ver, uzun konuşma.)"
+                elif fc.name == "muzigi_durdur":
+                    from music import music
+                    result = await music.stop()
                 elif fc.name != "ekrana_bak":
                     result = f"Bilinmeyen araç: {fc.name}"
                 else:
@@ -365,6 +384,8 @@ class Live:
                         state["last_model"] = time.time()
                         heard, said = state["heard"].strip(), state["said"].strip()
                         state["heard"] = state["said"] = ""
+                        if said and not FOLLOWUP:
+                            state["done"] = True       # tek soru-cevap: cevap bitince dinlemeyi bırak
                         if heard or said:
                             self.turns += 1
                             if self.on_turn:
@@ -394,6 +415,9 @@ class Live:
                 now = time.time()
                 if now - self.started_at > MAX_SESSION_S:
                     log.info("Canlı sohbet süre sınırına geldi")
+                    return
+                if (state.get("done") and not state["busy"] and not state["tool"] and not player.playing()
+                        and now > state["screen_until"]):
                     return
                 quiet_since = max(state["last_user"], player.until, state["last_model"])
                 if (not state["busy"] and not state["tool"] and not player.playing()
