@@ -37,8 +37,9 @@ PI_Z0 = 16.0                        # kartın alt kenarı (altında açılı USB
 PI_Z1 = PI_Z0 + PI_H                # 72
 PI_YB = -9.0                        # kartın alt yüzü (ön); HAT köşesi duvara sığsın
 PI_YIGIN = 38.0                     # ÖLÇ: Pi + Active Cooler + M.2 HAT+ (+SSD), kart dahil
-PI_DELIK = [(-39.0, PI_Z0 + 3.5), (19.0, PI_Z0 + 3.5), (-39.0, PI_Z0 + 52.5), (19.0, PI_Z0 + 52.5)]   # (x, z)
-PI_USBC_X = -42.5 + 11.2
+PI_DX = 8.0                         # Pi sağa kaydırıldı: USB/Ethernet uçları gövde yüzeyine gelsin
+PI_DELIK = [(PI_DX - 39.0, PI_Z0 + 3.5), (PI_DX + 19.0, PI_Z0 + 3.5), (PI_DX - 39.0, PI_Z0 + 52.5), (PI_DX + 19.0, PI_Z0 + 52.5)]   # (x, z)
+PI_USBC_X = PI_DX - 42.5 + 11.2
 PLAKA_T = 3.0
 TASIYICI_Y = (PI_YB - 7, PI_YB - 4) # Pi taşıyıcı duvarı (alt plakadan yükselir)
 BUS_Y = (-41.0, -38.0)              # servo kartı taşıyıcı duvarı
@@ -165,14 +166,14 @@ def govde(x, y, z):
     sol = D(sol, dc_cyl(9.5, G_IC - 1.5, 80))
     # --- açıklıklar ---
     kes = Un(
-        # USB + Ethernet (sağ, +x): kartın +x ucu, bileşen tarafı
-        box(x, y, z, 40, 70, PI_YB + 0.5, PI_YB + 20, PI_Z0 + 1, PI_Z1 - 1),
+        # USB + Ethernet (sağ, +x): portların ucu gövde yüzeyinde, açıkta
+        box(x, y, z, 38, 70, PI_YB + 0.5, PI_YB + 20, PI_Z0 + 1, PI_Z1 - 1),
         # USB-C (alt kenar, aşağı bakar): açılı fiş + kablo sola-arkaya çıkar
         box(x, y, z, -70, PI_USBC_X + 7, PI_YB - 3, PI_YB + 10, PLAKA_T + 1, PI_Z0 - 1),
         # microSD (sol, -x ucu, kartın ön yüzünde)                   ÖLÇ: yuvanın z konumu
-        box(x, y, z, -70, -40, PI_YB - 4, PI_YB + 4, PI_Z0 + 22, PI_Z0 + 34),
+        box(x, y, z, -70, PI_DX - 40, PI_YB - 4, PI_YB + 4, PI_Z0 + 22, PI_Z0 + 34),
         # GPIO penceresi (arka, +y): başlığın karşısı, HAT üstündeki pinlere bakar
-        box(x, y, z, -38, 18, 30, 70, PI_Z1 - 16, PI_Z1 + 8),
+        box(x, y, z, PI_DX - 38, PI_DX + 18, 30, 70, PI_Z1 - 16, PI_Z1 + 8),
         # 12 V DC jak
         dc_cyl(5.5, 30, 80),
         # yan havalandırma (±x), pan servo hizası
@@ -186,8 +187,8 @@ def alt_plaka(x, y, z):
     p = cyl(x, y, z, "z", (0, 0), G_IC - B, 0, PLAKA_T)
     # Pi taşıyıcı duvarı + ayaklar (vida önden, HAT direklerine)
     ty0, ty1 = TASIYICI_Y
-    duvar_pi = box(x, y, z, -40, 40, ty0, ty1, PLAKA_T - 0.01, PI_Z1)
-    for rx in (-30, 0, 30):   # dik kaburgalar
+    duvar_pi = box(x, y, z, PI_DX - 40, PI_DX + 40, ty0, ty1, PLAKA_T - 0.01, PI_Z1)
+    for rx in (PI_DX - 30, PI_DX, PI_DX + 30):   # dik kaburgalar
         duvar_pi = U(duvar_pi, box(x, y, z, rx - 1.5, rx + 1.5, ty0 - 6, ty0 + 0.01, PLAKA_T - 0.01, PI_Z1 - 6))
     ayak = Un(*[cyl(x, y, z, "y", (px, pz), 3.25, ty1 - 0.01, PI_YB) for px, pz in PI_DELIK])
     # servo kartı taşıyıcısı (dik), cırt/zip yuvaları
@@ -263,7 +264,7 @@ def boyun(x, y, z):
         cy, cz = KORNA_DELIK_C / 2 * math.cos(a), EKSEN_Z + KORNA_DELIK_C / 2 * math.sin(a)
         kes += [cyl(x, y, z, "x", (cy, cz), KORNA_VIDA / 2, KOL_IC - 1, KOL_IC + KOL_T + 1),
                 cyl(x, y, z, "x", (cy, cz), 2.6, KOL_IC + KOL_T - 2, KOL_IC + KOL_T + 1)]
-    # sol kol: 2 x 608ZZ dışarıdan basılır, içte 2 mm omuz; M8 cıvata mil olur
+    # sol kol: 2 x 608ZZ dışarıdan basılır, içte 2 mm omuz; baskı mil burcu + M3 vida mil olur
     kes += [cyl(x, y, z, "x", (0, EKSEN_Z), R608[1] / 2 + 0.05, -KOL_IC - GOBEK_L - 1, -KOL_IC - 2),
             cyl(x, y, z, "x", (0, EKSEN_Z), 8.0, -KOL_IC - 3, -KOL_IC + 1)]
     return D(p, Un(*kes))
@@ -285,7 +286,7 @@ def kafa(x, y, z):
     cep = D(cep, box(x, y, z, -60, 60, -60, y0 - B, -60, 60))          # önden açık: servo önden girer
     cep = I(cep, sphere(x, y, z, (0, 0, 0), K_IC + 0.5))
     # sol mil yuvası (M3 insert) + dış pul
-    # sol mil: iç bileziklere dayanan Ø11 burun + içte M8 somun yuvası (cıvata dışarıdan sıkılır)
+    # sol mil: iç bileziklere dayanan Ø11 burun; mil burcu + M3 vida dışarıdan buraya sıkılır
     mil = U(cyl(x, y, z, "x", (0, 0), 5.5, -KOL_IC - 2, -DUZ_X + 0.01),
             cyl(x, y, z, "x", (0, 0), 12.0, -DUZ_X + 0.5, -DUZ_X + DUVAR + 9))
     # ekran yatağı (ön duvarın arkası)
@@ -300,11 +301,7 @@ def kafa(x, y, z):
     kes = [cyl(x, y, z, "y", (0, EKRAN_Z), EKRAN_PENCERE / 2, YUZ_Y - 5, YUZ_Y + DUVAR + 0.01),   # ekran penceresi
            cyl(x, y, z, "y", (0, KAM_Z), KAM_LENS_D / 2, YUZ_Y - 5, KAM_KART_Y),                 # kamera lensi
            cyl(x, y, z, "x", (0, 0), 11.5, SV_T_YUZ - 0.5, DUZ_X + 1),                          # sağ: korna deliği
-           cyl(x, y, z, "x", (0, 0), 4.2, -KOL_IC - 3, -DUZ_X + DUVAR + 10)]                      # sol: M8 geçiş
-    # M8 somun (13 mm anahtar) altıgen yuvası, içeriden
-    ang = np.arctan2(z, y); rr = np.sqrt(y * y + z * z)
-    hexd = rr * np.cos(((ang + np.pi / 6) % (np.pi / 3)) - np.pi / 6) - 6.65
-    kes.append(np.maximum(hexd, np.maximum((-DUZ_X + DUVAR + 2) - x, x - (-DUZ_X + DUVAR + 10))))
+           cyl(x, y, z, "x", (0, 0), 2.0, -KOL_IC - 3, -KOL_IC - 2 + 9)]                          # sol: M3 insert (9 derin)
     for dx, dz in KAM_DELIK:   # M2 vida yüzden, somun kartın arkasında
         kes += [cyl(x, y, z, "y", (dx, KAM_Z + dz), 1.15, YUZ_Y - 1, KAM_KART_Y + 1),
                 cyl(x, y, z, "y", (dx, KAM_Z + dz), 2.1, YUZ_Y - 1, YUZ_Y + 1.2)]
@@ -317,6 +314,13 @@ def kafa(x, y, z):
                 cyl(x, y, z, "y", (px, pz), 1.7, BOLME_Y - 0.1, BOLME_Y + 10.1),  # arka: geçiş
                 cyl(x, y, z, "y", (px, pz), 3.3, BOLME_Y + 10, 80)]               # vida başı kanalı
     return D(k, Un(*kes))
+
+
+BURC_D = 7.85                        # ÖLÇ: 608 deliğine sıkı geçmeli (8.0); gevşekse 7.95 yap
+def mil_burcu(x, y, z):   # kendi koordinatı: flanş tablada, mil +z
+    p = U(cyl(x, y, z, "z", (0, 0), 6.0, 0, 2.0), cyl(x, y, z, "z", (0, 0), BURC_D / 2, 2.0 - 0.01, 2.0 + R608[2] * RUL_SAYI))
+    p = D(p, cyl(x, y, z, "z", (0, 0), 1.7, -1, 20))
+    return D(p, cyl(x, y, z, "z", (0, 0), 2.9, -1, 1.2, 1.7))    # M3 başı için havşa
 
 
 def kafa_on(x, y, z):   return I(kafa(x, y, z), y - BOLME_Y)
@@ -379,6 +383,7 @@ PARTS = {
     "kelepce":   (kelepce, ((-6, 6), (-24, 24), (-0.5, 4)), lambda v: v),
     "boyun":     (boyun, ((-KOL_IC - GOBEK_L - 1, KOL_IC + KOL_T + 1), (-33, 33), (BOYUN_Z0 - 0.5, EKSEN_Z + KOL_W / 2 + 0.5)),
                   lambda v: v - np.array([0, 0, BOYUN_Z0])),
+    "mil_burcu": (mil_burcu, ((-7, 7), (-7, 7), (-0.5, 17)), lambda v: v),
     "kafa_on":   (kafa_on, ((-K_R - 1, K_R + 1), (YUZ_Y - 0.5, BOLME_Y + 0.5), (-K_R - 1, K_R + 1)),
                   lambda v: to_bed(rot_x(v, 90))),   # yüz tablada
     "kafa_arka": (kafa_arka, ((-K_R - 1, K_R + 1), (BOLME_Y - 0.5, K_R + 1), (-K_R - 1, K_R + 1)),
@@ -389,6 +394,8 @@ PARTS = {
 def assembly_transform(name, v):   # tasarım koordinatından montaj koordinatına (eğim 0)
     if name.startswith("kafa"):
         return v + np.array([0, 0, EKSEN_Z])
+    if name == "mil_burcu":   # flanş dışta (-x), mil kafaya doğru (+x)
+        return np.stack([-KOL_IC - GOBEK_L - 2 + v[:, 2], v[:, 1], v[:, 0] + EKSEN_Z], 1)
     if name == "kelepce":
         x0, x1, y0, y1, z0, z1 = pan_servo_kutu()
         return np.stack([v[:, 0] + KELEPCE_X, v[:, 1], (z0 - 0.3) - v[:, 2]], 1)

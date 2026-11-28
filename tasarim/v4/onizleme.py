@@ -6,7 +6,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from robot_v4 import *
 
 renk = {"govde": "#e8e8e8", "alt_plaka": "#b0b0b0", "kapak": "#cfcfcf", "kelepce": "#888888",
-        "boyun": "#9fb7d6", "kafa_on": "#f5f5f5", "kafa_arka": "#d9d9d9"}
+        "boyun": "#9fb7d6", "kafa_on": "#f5f5f5", "kafa_arka": "#d9d9d9", "mil_burcu": "#9fb7d6"}
 meshes = {}
 for n, (fn, bounds, _) in PARTS.items():
     v, f, _ = mesh(fn, bounds, res=1.1)
