@@ -43,41 +43,44 @@ class Music:
         return self.proc is not None and self.proc.returncode is None
 
     async def _find(self, query: str) -> tuple[str, str]:
-        """(başlık, ses adresi). Sadece bilgi alır, dosya indirmez."""
+        """(başlık, doğrudan ses adresi). İlk 5 sonuçtan şarkı uzunluğundakini (1-12 dk) seçer. İndirmez."""
         exe = _ytdlp()
         if not exe:
             raise RuntimeError("yt-dlp kurulu değil (venv içinde: pip install -U yt-dlp)")
         p = await asyncio.create_subprocess_exec(
-            exe, "--no-playlist", "--quiet", "--no-warnings", "-f", "bestaudio/best", "-J",
-            f"ytsearch1:{query}", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        out, err = await asyncio.wait_for(p.communicate(), 40)
-        if p.returncode:
-            raise RuntimeError(err.decode(errors="ignore").strip()[-200:] or "arama başarısız")
+            exe, "--no-playlist", "--no-warnings", "-f", "bestaudio[ext=m4a]/bestaudio/best", "-J",
+            f"ytsearch5:{query}", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await asyncio.wait_for(p.communicate(), 60)
+        if p.returncode and not out:
+            raise RuntimeError(err.decode(errors="ignore").strip()[-300:] or "arama başarısız")
         data = json.loads(out or b"{}")
-        if data.get("entries"):
-            data = data["entries"][0]
-        if not data:
-            raise RuntimeError("Şarkı bulunamadı")
-        url = data.get("webpage_url") or data.get("url")
-        return data.get("title") or query, url
+        entries = [e for e in (data.get("entries") or [data]) if e and e.get("url")]
+        if not entries:
+            raise RuntimeError("Şarkı bulunamadı" + (": " + err.decode(errors="ignore").strip()[-200:] if err else ""))
+        songs = [e for e in entries if 60 <= (e.get("duration") or 0) <= 720 and not e.get("is_live")]
+        best = (songs or entries)[0]
+        return best.get("title") or query, best["url"]
 
     async def _start(self, url: str, start: float = 0.0) -> bool:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(SOCK)
-        args = ["mpv", "--no-video", "--really-quiet", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}",
+        args = ["mpv", "--no-video", "--no-ytdl", "--no-terminal", "--msg-level=all=error",
+                f"--log-file=/tmp/robot-mpv.log", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}",
                 "--ao=alsa", f"--audio-device=alsa/{DEVICE}"]
         if start > 1:
             args.append(f"--start={start:.1f}")
-        exe = _ytdlp()
-        if exe:
-            args.append(f"--script-opts=ytdl_hook-ytdl_path={exe}")
         args.append(url)
         self.proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL,
                                                          stderr=asyncio.subprocess.PIPE)
         await asyncio.sleep(3)
         if not self.playing():
-            err = (await self.proc.stderr.read()).decode(errors="ignore").strip()[-200:]
-            self.error = err or "mpv hemen kapandı"
+            err = (await self.proc.stderr.read()).decode(errors="ignore").strip()
+            if not err:
+                with contextlib.suppress(OSError):
+                    lines = [l for l in open("/tmp/robot-mpv.log", errors="ignore") if "error" in l.lower()
+                             or "fail" in l.lower()]
+                    err = " | ".join(l.strip() for l in lines[-3:])
+            self.error = (err or "mpv hemen kapandı")[-250:]
             return False
         return True
 
