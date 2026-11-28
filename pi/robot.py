@@ -610,7 +610,11 @@ def ears_line() -> str:
     if not st["enabled"]:
         return "👂 Kulak: kapalı (/dinle)"
     if st["running"]:
-        return f"👂 Kulak: dinliyor (\"{st['wake_words'][0]}\" de)"
+        ok = [w for w in st["wake_words"] if w not in st["missing_words"]]
+        line = "👂 Kulak: dinliyor (" + " ya da ".join(f'"{w}"' for w in ok) + " de)"
+        if st["missing_words"]:
+            line += " · sözlükte olmadığı için duyamadıklarım: " + ", ".join(st["missing_words"])
+        return line
     return f"👂 Kulak: çalışmıyor ({st['error'] or 'başlıyor'})"
 
 
