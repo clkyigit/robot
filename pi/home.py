@@ -381,7 +381,7 @@ class TV:
             return TVPLUS_PKG
         out = await self._shell("pm list packages")
         pk = [l.split(":", 1)[1] for l in out.splitlines() if l.startswith("package:")]
-        for key in ("tvplus", "tv_plus", "tvartı", "turktelekom", "ttnet", "ttplus"):
+        for key in ("tvplus", "tv_plus", "turkcell", "ott", "tivibu", "turktelekom", "ttnet", "ttplus"):
             hit = [x for x in pk if key in x.lower()]
             if hit:
                 TVPLUS_PKG = hit[0]
@@ -421,7 +421,10 @@ class TV:
             if a in ("tvplus", "tv+", "kanal"):
                 pkg = await self._tvplus_pkg()
                 if not pkg:
-                    return "📺 TV'de TV+ uygulamasını bulamadım (gerekirse .env: TVPLUS_PKG=paket.adı)."
+                    out = await self._shell("pm list packages -3")
+                    pk = sorted(l.split(":", 1)[1] for l in out.splitlines() if l.startswith("package:"))
+                    return ("📺 TV'de TV+ uygulamasını tanıyamadım. TV'deki yüklü uygulamalar:\n" + "\n".join(pk) +
+                            "\n\nBunlardan TV+ olanı söyle ya da .env'e ekle: TVPLUS_PKG=paket.adı")
                 await self._key("KEYCODE_WAKEUP")
                 await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 if not v:
@@ -434,6 +437,9 @@ class TV:
                 await self._shell(" ; ".join(f"input keyevent KEYCODE_{d}" for d in num) + " ; sleep 1 ; "
                                   "input keyevent KEYCODE_DPAD_CENTER")
                 return f"📺 TV+ açıldı, {v} ({num}. kanal) seçiliyor."
+            if a in ("paketler", "uygulamalar"):
+                out = await self._shell("pm list packages -3")
+                return "📺 " + "\n".join(sorted(l.split(":", 1)[1] for l in out.splitlines() if l.startswith("package:")))
             if a in ("youtube_ara", "ara"):
                 from urllib.parse import quote
                 await self._key("KEYCODE_WAKEUP")
