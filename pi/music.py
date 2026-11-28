@@ -61,7 +61,8 @@ class Music:
             raise RuntimeError("Şarkı bulunamadı" + (": " + err.decode(errors="ignore").strip()[-200:] if err else ""))
         songs = [e for e in entries if 60 <= (e.get("duration") or 0) <= 720 and not e.get("is_live")]
         best = (songs or entries)[0]
-        return best.get("title") or query, best["url"]
+        page = best.get("webpage_url") or best.get("original_url") or best["url"]
+        return best.get("title") or query, page
 
     async def _start(self, url: str, start: float = 0.0) -> bool:
         """mpv sesi çözer, ham PCM olarak aplay'e verir. aplay robotun konuşmasıyla aynı yoldan çaldığı için
@@ -70,23 +71,27 @@ class Music:
             os.unlink(SOCK)
         with contextlib.suppress(OSError):
             open("/tmp/robot-mpv.log", "w").close()
+        # yt-dlp sesi kendisi indirip akıtır (YouTube'un istediği başlıklarla), mpv çözer, aplay çalar
+        ytdlp = [_ytdlp() or "yt-dlp", "--quiet", "--no-warnings", "--no-playlist", "-f",
+                 "bestaudio[ext=m4a]/bestaudio/best", "-o", "-", url]
         mpv = ["mpv", "--no-video", "--no-ytdl", "--no-terminal", "--msg-level=all=error",
                "--log-file=/tmp/robot-mpv.log", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}",
                "--ao=pcm", "--ao-pcm-file=/dev/stdout", "--ao-pcm-waveheader=no",
                "--audio-format=s16", "--audio-samplerate=48000", "--audio-channels=stereo"]
         if start > 1:
             mpv.append(f"--start={start:.1f}")
-        mpv.append(url)
-        cmd = (" ".join(shlex.quote(a) for a in mpv) + " | aplay -q -D " + shlex.quote(DEVICE)
-               + " -t raw -f S16_LE -r 48000 -c 2")
-        self.proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, start_new_session=True)
-        await asyncio.sleep(4)
+        mpv.append("-")
+        q = lambda a: " ".join(shlex.quote(x) for x in a)
+        cmd = (f"set -o pipefail; {q(ytdlp)} | {q(mpv)} | aplay -q -D {shlex.quote(DEVICE)}"
+               " -t raw -f S16_LE -r 48000 -c 2")
+        self.proc = await asyncio.create_subprocess_exec(
+            "bash", "-c", cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            start_new_session=True)
+        await asyncio.sleep(6)
         if not self.playing():
             err = (await self.proc.stderr.read()).decode(errors="ignore").strip()
             with contextlib.suppress(OSError):
-                lines = [l for l in open("/tmp/robot-mpv.log", errors="ignore")
-                         if "error" in l.lower() or "fail" in l.lower()]
+                lines = [l for l in open("/tmp/robot-mpv.log", errors="ignore") if "][e][" in l]
                 err = (err + " | " + " | ".join(l.strip() for l in lines[-3:])).strip(" |")
             self.error = (err or "çalma hemen bitti")[-250:]
             return False
