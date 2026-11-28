@@ -14,7 +14,7 @@
 //  Birim mm. govde/alt_plaka/kapak PETG; boyun/kafa PLA veya PETG.
 // =====================================================================
 
-PARCA = "montaj";
+PARCA = "montaj"; // [montaj, govde, alt_plaka, kapak, boyun, kafa_on, kafa_arka]
 egim = 0;   // montaj: kafa eğimi (derece, + = yukarı)
 pan  = 0;   // montaj: pan açısı
 
