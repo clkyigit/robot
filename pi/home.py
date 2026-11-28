@@ -440,17 +440,32 @@ class TV:
                     return ("📺 TV'de TV+ uygulamasını tanıyamadım. TV'deki yüklü uygulamalar:\n" + "\n".join(pk) +
                             "\n\nBunlardan TV+ olanı söyle ya da .env'e ekle: TVPLUS_PKG=paket.adı")
                 await self._key("KEYCODE_WAKEUP")
-                await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
+                num = kanal_no(v) if v else ""
+                if v and not num:
+                    return (f"📺 '{v}' kanalını listemde bulamadım. Numarasıyla söyle "
+                            "(örn. 'TV+ 25') ya da .env'e ekle: TVPLUS_KANALLAR=kanaladi:numara")
+                # Kaldığı ekrandan (dizi sayfası vb.) değil, baştan açılsın
+                await self._shell(f"am force-stop {pkg}")
+                live = os.environ.get("TVPLUS_LIVE", "").strip()
+                if live:
+                    await self._shell(f"am start -n {pkg}/{live}")
+                else:
+                    await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 if not v:
                     return "📺 TV+ açılıyor."
-                num = kanal_no(v)
-                if not num:
-                    return (f"📺 TV+ açılıyor, ama '{v}' kanalını listemde bulamadım. Numarasıyla söyle "
-                            "(örn. 'TV+ 25') ya da .env'e ekle: TVPLUS_KANALLAR=kanaladi:numara")
-                await asyncio.sleep(8)          # uygulama ve canlı yayın açılsın
+                await asyncio.sleep(10)         # uygulama ve canlı yayın açılsın
                 await self._shell(" ; ".join(f"input keyevent KEYCODE_{d}" for d in num) + " ; sleep 1 ; "
                                   "input keyevent KEYCODE_DPAD_CENTER")
                 return f"📺 TV+ açıldı, {v} ({num}. kanal) seçiliyor."
+            if a in ("aktiviteler", "ekranlar"):
+                pkg = await self._tvplus_pkg() or v
+                out = await self._shell(f"dumpsys package {pkg}")
+                acts = sorted(set(re.findall(re.escape(pkg) + r"/([A-Za-z0-9_.$]+)", out)))
+                key = re.compile(r"live|channel|kanal|player|tv|main|home|epg", re.I)
+                acts = [x for x in acts if key.search(x.rsplit(".", 1)[-1])]
+                schemes = sorted(set(re.findall(r'scheme:? *"?([a-z][a-z0-9+.-]+)', out)))
+                return ("📺 " + pkg + " ekranları:\n" + "\n".join(acts[:50]) +
+                        "\n\nBağlantı şemaları: " + ", ".join(schemes[:20]))[:3900]
             if a in ("paketler", "uygulamalar"):
                 out = await self._shell("pm list packages -3")
                 return "📺 " + "\n".join(sorted(l.split(":", 1)[1] for l in out.splitlines() if l.startswith("package:")))
