@@ -7,7 +7,7 @@ TV: Ayarlar > Cihaz tercihleri > Hakkında > "Yapım numarası"na 7 kez bas (gel
   İlk bağlantıda TV'de çıkan "Hata ayıklamaya izin ver" sorusuna "Her zaman izin ver" de.
 
 Ayarlar (.env):
-  TV_IP=192.168.1.50           TV'nin ev ağındaki adresi (sabit IP verilmesi önerilir)
+  TV_IP=192.168.1.50           isteğe bağlı: yazılmazsa robot TV'yi ağda kendisi bulur
   GOVEE_NAMES=H8005A:tavan,H6099:tv    isteğe bağlı: model -> isim (konuşurken "tavan ışığı" diyebilmek için)
   GOVEE_API_KEY=...            isteğe bağlı: LAN'da bulunamazsa Govee bulutu ile kontrol (Govee Home > Profil > ⚙️ > Apply for API Key)
 """
@@ -91,6 +91,7 @@ def _msg(cmd: str, data: dict) -> bytes:
 
 GOVEE_API_KEY = os.environ.get("GOVEE_API_KEY", "").strip()
 GOVEE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "govee.json")
+TV_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tv.json")
 GOVEE_CLOUD = "https://openapi.api.govee.com/router/api/v1"
 
 
@@ -316,11 +317,40 @@ class TV:
         out, _ = await asyncio.wait_for(p.communicate(), timeout)
         return out.decode(errors="ignore").strip()
 
+    async def _find(self) -> str:
+        """TV_IP yoksa ya da değiştiyse: ağda adb portu (5555) açık cihazı kendisi bulur, hatırlar."""
+        me = _local_ip()
+        if not me:
+            return ""
+        base = me.rsplit(".", 1)[0]
+
+        async def probe(ip: str) -> str:
+            try:
+                _, w = await asyncio.wait_for(asyncio.open_connection(ip, 5555), 0.6)
+                w.close()
+                return ip
+            except Exception:  # noqa: BLE001
+                return ""
+        hits = [ip for ip in await asyncio.gather(*(probe(f"{base}.{i}") for i in range(1, 255))) if ip and ip != me]
+        if hits:
+            with contextlib.suppress(Exception):
+                with open(TV_CACHE, "w") as f:
+                    json.dump({"ip": hits[0]}, f)
+        return hits[0] if hits else ""
+
     async def _connect(self) -> str | None:
-        if not TV_IP:
-            return "TV adresi ayarlı değil (.env: TV_IP=TV'nin IP adresi)."
+        global TV_IP
         if not shutil.which("adb"):
             return "adb kurulu değil (sudo apt install adb)."
+        if not TV_IP:
+            with contextlib.suppress(Exception):
+                with open(TV_CACHE) as f:
+                    TV_IP = json.load(f)["ip"]
+        if not TV_IP:
+            TV_IP = await self._find()
+        if not TV_IP:
+            return ("TV'yi ağda bulamadım. TV açık mı, Geliştirici seçenekleri > 'USB hata ayıklama' açık mı? "
+                    "(Gerekirse .env: TV_IP=...)")
         target = TV_IP if ":" in TV_IP else f"{TV_IP}:5555"
         state = await self._adb("-s", target, "get-state", timeout=5)
         if state.strip() == "device":
@@ -329,6 +359,11 @@ class TV:
         state = await self._adb("-s", target, "get-state", timeout=5)
         if state.strip() == "device":
             return None
+        if "unauthorized" not in (out + state) and not os.environ.get("TV_IP"):
+            ip = await self._find()                 # adres değişmiş olabilir: yeniden ara
+            if ip and ip != TV_IP:
+                TV_IP = ip
+                return await self._connect()
         if "unauthorized" in (out + state):
             return "TV ekranındaki 'hata ayıklamaya izin ver' sorusuna 'Her zaman izin ver' de, sonra tekrar dene."
         return f"TV'ye bağlanamadım ({out[:120]}). TV açık mı, geliştirici modunda ağ/USB hata ayıklama açık mı?"
