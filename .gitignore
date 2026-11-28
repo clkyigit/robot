@@ -32,3 +32,5 @@ pi/.selfdev/
 # Govee cihaz önbelleği (ev ağı adresleri)
 pi/govee.json
 pi/tv.json
+tasarim/v4/stl/
+tasarim/v4/*.zip
