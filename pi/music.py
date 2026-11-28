@@ -13,7 +13,9 @@ import json
 import logging
 import os
 import pathlib
+import shlex
 import shutil
+import signal
 import sys
 import time
 
@@ -62,38 +64,37 @@ class Music:
         return best.get("title") or query, best["url"]
 
     async def _start(self, url: str, start: float = 0.0) -> bool:
-        """Önce ayarlı ALSA cihazını, olmazsa PipeWire/Pulse/varsayılan çıkışı dener."""
-        for ao in (["--ao=alsa", f"--audio-device=alsa/{DEVICE}"], ["--ao=pipewire,pulse,alsa"]):
-            if await self._start_with(url, start, ao):
-                return True
-            log.warning("mpv %s ile açılamadı: %s", ao, self.error)
-        return False
-
-    async def _start_with(self, url: str, start: float, ao: list) -> bool:
-        with contextlib.suppress(OSError):
-            open("/tmp/robot-mpv.log", "w").close()
+        """mpv sesi çözer, ham PCM olarak aplay'e verir. aplay robotun konuşmasıyla aynı yoldan çaldığı için
+        (çalıştığı biliniyor) mpv'nin kendi ses sürücüsüne gerek kalmaz."""
         with contextlib.suppress(FileNotFoundError):
             os.unlink(SOCK)
-        args = ["mpv", "--no-video", "--no-ytdl", "--no-terminal", "--msg-level=all=error",
-                f"--log-file=/tmp/robot-mpv.log", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}", *ao]
+        with contextlib.suppress(OSError):
+            open("/tmp/robot-mpv.log", "w").close()
+        mpv = ["mpv", "--no-video", "--no-ytdl", "--no-terminal", "--msg-level=all=error",
+               "--log-file=/tmp/robot-mpv.log", f"--volume={VOLUME}", f"--input-ipc-server={SOCK}",
+               "--ao=pcm", "--ao-pcm-file=/dev/stdout", "--ao-pcm-waveheader=no",
+               "--audio-format=s16", "--audio-samplerate=48000", "--audio-channels=stereo"]
         if start > 1:
-            args.append(f"--start={start:.1f}")
-        args.append(url)
-        self.proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL,
-                                                         stderr=asyncio.subprocess.PIPE)
-        with contextlib.suppress(FileNotFoundError):
-            pass
-        await asyncio.sleep(3)
+            mpv.append(f"--start={start:.1f}")
+        mpv.append(url)
+        cmd = (" ".join(shlex.quote(a) for a in mpv) + " | aplay -q -D " + shlex.quote(DEVICE)
+               + " -t raw -f S16_LE -r 48000 -c 2")
+        self.proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        await asyncio.sleep(4)
         if not self.playing():
             err = (await self.proc.stderr.read()).decode(errors="ignore").strip()
-            if not err:
-                with contextlib.suppress(OSError):
-                    lines = [l for l in open("/tmp/robot-mpv.log", errors="ignore") if "error" in l.lower()
-                             or "fail" in l.lower()]
-                    err = " | ".join(l.strip() for l in lines[-3:])
-            self.error = (err or "mpv hemen kapandı")[-250:]
+            with contextlib.suppress(OSError):
+                lines = [l for l in open("/tmp/robot-mpv.log", errors="ignore")
+                         if "error" in l.lower() or "fail" in l.lower()]
+                err = (err + " | " + " | ".join(l.strip() for l in lines[-3:])).strip(" |")
+            self.error = (err or "çalma hemen bitti")[-250:]
             return False
         return True
+
+    def _kill(self) -> None:
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
 
     async def play(self, query: str) -> str:
         """Şarkıyı bulup çalar. Kullanıcıya gösterilecek kısa sonuç döner."""
@@ -122,11 +123,9 @@ class Music:
         if not self.playing():
             self.proc = None
             return "Zaten bir şey çalmıyordu."
-        self.proc.terminate()
+        self._kill()
         with contextlib.suppress(Exception):
             await asyncio.wait_for(self.proc.wait(), 3)
-        if self.proc.returncode is None:
-            self.proc.kill()
         t, self.proc, self.title = self.title, None, ""
         return f"Durdurdum: {t}"
 
@@ -164,7 +163,7 @@ class Music:
         if self._ducks == 1 and self.playing():
             pos = await self._get("time-pos")
             title = self.title
-            self.proc.terminate()
+            self._kill()
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.proc.wait(), 2)
             self.proc, self.title = None, title
