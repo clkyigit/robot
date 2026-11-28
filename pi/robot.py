@@ -593,6 +593,19 @@ def speak_later(update, text: str) -> None:
 _BG_TASKS: set = set()
 
 
+async def voice_music(heard: str) -> str | None:
+    """Sesli komutta müzik isteği varsa (model aracı kullanmasa bile) doğrudan uygular."""
+    t = strip_wake(heard or "").strip(" .,!?")
+    m = _MUSIC_PLAY.match(t)
+    if m:
+        if music.status()["playing"]:          # model zaten sarki_cal ile başlattı
+            return None
+        return await music.play((m.group(1) or m.group(2) or "").strip())
+    if _MUSIC_STOP.match(t) or re.search(r"\b(müziği|şarkıyı)\s+(durdur|kapat|kes|sustur)", t, re.I):
+        return await music.stop()
+    return None
+
+
 def wants_voice(text: str) -> bool:
     """Telegram mesajı sesli cevap istiyor mu? ("saati sesli söyle", "konuş", "sesli oku")"""
     return bool(_VOICE_ASK.search(text or ""))
@@ -691,6 +704,11 @@ async def on_heard(wav: bytes) -> None:
         return
     ears.heard(text)
     log.info("Sesli: %s", text)
+    note = await voice_music(text)
+    if note:
+        await tell_owner(f"🎤 {text}\n\n🎵 {note}", record=False)
+        await voice.say(note.split(":")[0] + ".")
+        return
     photo_ids: list[str] = []
 
     async def send_photo(img: bytes) -> None:
@@ -725,6 +743,9 @@ async def on_live(preroll: bytes, pending: list) -> None:
 
 async def on_live_turn(heard: str, said: str) -> None:
     """Canlı sohbetin her soru-cevabı: hafızaya, günün kaydına ve (isteğe bağlı) Telegram'a."""
+    note = await voice_music(heard)
+    if note:
+        said = (said + " 🎵 " + note).strip()
     if heard:
         ears.heard(heard)
     mem = brain.load_memory()
