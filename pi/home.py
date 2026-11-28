@@ -411,6 +411,26 @@ class TV:
                 return label
         return ""
 
+    async def _pass_profile(self) -> bool:
+        """'Kim izliyor?' profil ekranı çıkarsa profili seç (TVPLUS_PROFIL ya da ilk profil)."""
+        for _ in range(6):
+            nodes = await self._ui()
+            if not nodes:
+                await asyncio.sleep(1.5)
+                continue
+            if not any("kimizliyor" in _norm(t) for t, _, _ in nodes):
+                return False
+            want = _norm(os.environ.get("TVPLUS_PROFIL", ""))
+            skip = ("kimizliyor", "duzenle", "profilekle", "tvlogo", "tv+logo")
+            cands = [(t, x, y) for t, x, y in nodes if _norm(t) and not any(k in _norm(t) for k in skip)]
+            pick = next((c for c in cands if want and want in _norm(c[0])), cands[0] if cands else None)
+            if pick:
+                await self._shell(f"input tap {pick[1]} {pick[2]}")
+                await asyncio.sleep(4)
+                return True
+            return False
+        return False
+
     async def _tvplus_channel(self, num: str) -> str:
         """TV+ ana ekranından 'Tüm kanallar'a girip kanalı yazısından bulup seçer."""
         names = {k for k, n in TVPLUS_KANALLAR.items() if n == num}
@@ -423,9 +443,11 @@ class TV:
                 return True
             return bool(re.match(rf"^{num}(?!\d)", n)) and len(n) > len(num)
 
+        await self._pass_profile()
         for _ in range(8):                       # ana ekran gelsin
             if await self._tap_text(lambda t: _norm(t) in ("tumkanallar", "tumkanallari", "kanallar", "canlitv")):
                 break
+            await self._pass_profile()
             await asyncio.sleep(1.5)
         await asyncio.sleep(3)
         for _ in range(14):
@@ -498,9 +520,10 @@ class TV:
                     await self._shell(f"am start -n {pkg}/{live}")
                 else:
                     await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
-                if not v:
-                    return "📺 TV+ açılıyor."
                 await asyncio.sleep(6)
+                if not v:
+                    await self._pass_profile()
+                    return "📺 TV+ açıldı."
                 hit = await self._tvplus_channel(num)
                 if hit:
                     return f"📺 TV+'ta {hit} açılıyor ({num}. kanal)."
