@@ -25,6 +25,10 @@ log = logging.getLogger("robot.home")
 
 GOVEE_MCAST, SCAN_PORT, LISTEN_PORT, CMD_PORT = "239.255.255.250", 4001, 4002, 4003
 TV_IP = os.environ.get("TV_IP", "").strip()
+TVPLUS_PKG = os.environ.get("TVPLUS_PKG", "").strip()
+# Kanal adı -> TV+ kanal numarası. Numaralar pakete göre değişir; .env'de TVPLUS_KANALLAR ile düzeltilebilir.
+TVPLUS_KANALLAR = {k.strip().lower(): v.strip() for k, v in
+                   (p.split(":", 1) for p in os.environ.get("TVPLUS_KANALLAR", "").split(",") if ":" in p)}
 NAMES = dict(p.split(":", 1) for p in os.environ.get("GOVEE_NAMES", "").split(",") if ":" in p)
 
 RENKLER = {
@@ -189,6 +193,19 @@ class TV:
     async def _key(self, code: str, n: int = 1) -> None:
         await self._shell(" ; ".join([f"input keyevent {code}"] * max(1, min(n, 30))))
 
+    async def _tvplus_pkg(self) -> str:
+        global TVPLUS_PKG
+        if TVPLUS_PKG:
+            return TVPLUS_PKG
+        out = await self._shell("pm list packages")
+        pk = [l.split(":", 1)[1] for l in out.splitlines() if l.startswith("package:")]
+        for key in ("tvplus", "tv_plus", "tvartı", "turktelekom", "ttnet", "ttplus"):
+            hit = [x for x in pk if key in x.lower()]
+            if hit:
+                TVPLUS_PKG = hit[0]
+                return TVPLUS_PKG
+        return ""
+
     async def command(self, action: str, value: str = "") -> str:
         err = await self._connect()
         if err:
@@ -219,6 +236,30 @@ class TV:
                     return f"📺 '{v}' uygulamasını tanımıyorum. Bildiklerim: {', '.join(UYGULAMALAR)}"
                 await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
                 return f"📺 {v} açılıyor."
+            if a in ("tvplus", "tv+", "kanal"):
+                pkg = await self._tvplus_pkg()
+                if not pkg:
+                    return "📺 TV'de TV+ uygulamasını bulamadım (gerekirse .env: TVPLUS_PKG=paket.adı)."
+                await self._key("KEYCODE_WAKEUP")
+                await self._shell(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1")
+                if not v:
+                    return "📺 TV+ açılıyor."
+                num = v if v.isdigit() else TVPLUS_KANALLAR.get(v.lower().replace(" ", ""), "") or \
+                    TVPLUS_KANALLAR.get(v.lower(), "")
+                if not num:
+                    known = ", ".join(f"{k}={n}" for k, n in TVPLUS_KANALLAR.items()) or "henüz tanımlı kanal yok"
+                    return (f"📺 TV+ açılıyor, ama '{v}' kanalının numarasını bilmiyorum ({known}). Numarayla söyle "
+                            "ya da .env'e ekle: TVPLUS_KANALLAR=trt1:1,show:5")
+                await asyncio.sleep(8)          # uygulama ve canlı yayın açılsın
+                await self._shell(" ; ".join(f"input keyevent KEYCODE_{d}" for d in num) + " ; sleep 1 ; "
+                                  "input keyevent KEYCODE_DPAD_CENTER")
+                return f"📺 TV+ açıldı, {v} ({num}. kanal) seçiliyor."
+            if a in ("youtube_ara", "ara"):
+                from urllib.parse import quote
+                await self._key("KEYCODE_WAKEUP")
+                await self._shell(f"am start -a android.intent.action.VIEW -d "
+                                  f"'https://www.youtube.com/results?search_query={quote(v)}' {UYGULAMALAR['youtube']}")
+                return f"📺 YouTube'da arıyorum: {v}"
             if a in ("youtube", "video"):
                 from music import _ytdlp
                 exe = _ytdlp()
@@ -261,7 +302,9 @@ TOOL_TV = {
     "name": "tv",
     "description": "Evdeki Android/Google TV'yi kontrol eder. eylem: ac, kapat, ses_ac, ses_kis (deger: kaç kademe), "
                    "sessiz, duraklat, ev, geri, uygulama (deger: youtube, netflix, prime, disney, spotify, tabii, "
-                   "blutv, exxen...), youtube (deger: aranacak video; TV'de YouTube'da açar).",
+                   "blutv, exxen...), youtube (deger: video adı; ilk sonucu TV'de oynatır), youtube_ara (deger: "
+                   "arama; TV'de YouTube arama sonuçlarını gösterir), tvplus (deger: kanal adı ya da numarası; "
+                   "TV+ uygulamasını açıp o kanala geçer, deger boşsa sadece açar).",
     "params": {"eylem": {"type": "string"}, "deger": {"type": "string"}},
     "required": ["eylem"],
 }
